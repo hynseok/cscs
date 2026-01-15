@@ -13,11 +13,11 @@ struct AppState {
     meili: Client,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug)]
 struct SearchParams {
     q: Option<String>,
-    venue: Option<String>,
-    year: Option<i32>,
+    venue: Vec<String>,
+    year: Vec<i32>,
     limit: Option<usize>,
     page: Option<usize>,
     facets: Option<String>,
@@ -59,12 +59,63 @@ async fn main() -> anyhow::Result<()> {
 
 async fn search_papers(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<SearchParams>,
+    Query(raw_params): Query<Vec<(String, String)>>,
 ) -> Json<serde_json::Value> {
+    // Parse parameters manually to handle repeated keys (arrays)
+    let mut params = SearchParams {
+        q: None,
+        venue: Vec::new(),
+        year: Vec::new(),
+        limit: None,
+        page: None,
+        facets: None,
+    };
+
+    for (key, value) in raw_params {
+        match key.as_str() {
+            "q" => params.q = Some(value),
+            "venue" => params.venue.push(value),
+            "year" => {
+                if let Ok(y) = value.parse::<i32>() {
+                    params.year.push(y);
+                }
+            },
+            "limit" => {
+                if let Ok(l) = value.parse::<usize>() {
+                    params.limit = Some(l);
+                }
+            },
+            "page" => {
+                if let Ok(p) = value.parse::<usize>() {
+                    params.page = Some(p);
+                }
+            },
+            "facets" => params.facets = Some(value),
+            _ => {}
+        }
+    }
+
     let index = state.meili.index("papers");
 
-    let venue_filter = params.venue.as_ref().map(|v| format!("venue = \"{}\"", v));
-    let year_filter = params.year.map(|y| format!("year = {}", y));
+    let venue_filter = if !params.venue.is_empty() {
+        let or_group = params.venue.iter()
+            .map(|v| format!("venue = \"{}\"", v))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        Some(format!("({})", or_group))
+    } else {
+        None
+    };
+
+    let year_filter = if !params.year.is_empty() {
+        let or_group = params.year.iter()
+            .map(|y| format!("year = {}", y))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        Some(format!("({})", or_group))
+    } else {
+        None
+    };
 
     // --- Main Search ---
     let mut main_search = index.search();
@@ -76,7 +127,6 @@ async fn search_papers(
     if let Some(ref f) = venue_filter { main_filters.push(f.clone()); }
     if let Some(ref f) = year_filter { main_filters.push(f.clone()); }
     
-    // Join filters with AND
     let main_filter_str = main_filters.join(" AND ");
     if !main_filters.is_empty() {
         main_search.with_filter(&main_filter_str);
@@ -90,12 +140,6 @@ async fn search_papers(
         main_search.with_offset(offset);
     }
     
-    // We execute the main search
-    // We only ask for facets in main search if we strictly need them, 
-    // but we will overwrite them with disjunctive ones anyway.
-    
-    // --- Disjunctive Facet Searches ---
-    // We need to check which facets are requested
     let mut requested_facets = Vec::new();
     if let Some(ref facets) = params.facets {
         requested_facets = facets.split(',').map(|s| s.trim()).collect();
@@ -104,10 +148,6 @@ async fn search_papers(
     let do_venue_facet = requested_facets.contains(&"venue");
     let do_year_facet = requested_facets.contains(&"year");
 
-    // We can run these concurrently.
-    // Note: 'search' builder borrows 'index'. We might need to create multiple searches.
-    // Since 'index' is just a struct wrapper (cheap to clone usually, or we just create it again), we can do that.
-    
     let main_fut = main_search.execute::<PaperHit>();
 
     let venue_fut = async {
@@ -117,8 +157,6 @@ async fn search_papers(
         search.with_limit(0);
         search.with_facets(Selectors::Some(&["venue"]));
         
-        // Apply all filters EXCEPT venue
-        // For venue facet, we want to see distribution across ALL venues, filtered only by Year (and Query)
         if let Some(ref f) = year_filter {
             search.with_filter(f);
         }
@@ -133,7 +171,6 @@ async fn search_papers(
         search.with_limit(0);
         search.with_facets(Selectors::Some(&["year"]));
         
-        // Apply all filters EXCEPT year
         if let Some(ref f) = venue_filter {
             search.with_filter(f);
         }
@@ -167,8 +204,6 @@ async fn search_papers(
         }
     }
 
-    // Since SearchResults field is private/setup in a way that might be hard to mutate directly if we don't own it fully or if struct fields are pub.
-    // Meilisearch SDK SearchResults fields are public.
     finals.facet_distribution = Some(combined_facets);
 
     Json(serde_json::to_value(finals).unwrap())
