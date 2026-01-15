@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    container_name: cscs-search-engine
+    ports:
+      - "7700:7700"
+    environment:
+      - MEILI_MASTER_KEY=1234
+      - MEILI_ENV=development
+    # environment:
+    #   - MEILI_MASTER_KEY=YOUR_MASTER_KEY
+    #   - MEILI_ENV=production
+    volumes:
+      - ./meili_data:/meili_data
+    restart: always
+
+  postgres:
+    image: postgres:latest
+    container_name: cscs-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=dblp_db
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  redis:
+    image: redis:latest
+    container_name: cscs-cache
+    ports:
+      - "6379:6379"
+    restart: always
