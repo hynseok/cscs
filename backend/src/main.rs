@@ -4,6 +4,7 @@ use axum::{
     routing::get,
 };
 use meilisearch_sdk::client::Client;
+use meilisearch_sdk::search::Selectors;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
@@ -61,49 +62,114 @@ async fn search_papers(
     Query(params): Query<SearchParams>,
 ) -> Json<serde_json::Value> {
     let index = state.meili.index("papers");
-    let mut search = index.search();
 
+    let venue_filter = params.venue.as_ref().map(|v| format!("venue = \"{}\"", v));
+    let year_filter = params.year.map(|y| format!("year = {}", y));
+
+    // --- Main Search ---
+    let mut main_search = index.search();
     if let Some(ref q) = params.q {
-        search.with_query(q);
+        main_search.with_query(q);
     }
 
-    let mut filters = Vec::new();
-    if let Some(ref v) = params.venue {
-        filters.push(format!("venue = \"{}\"", v));
-    }
-    if let Some(y) = params.year {
-        filters.push(format!("year = {}", y));
-    }
-
-    let filter_str = if !filters.is_empty() {
-        Some(filters.join(" AND "))
-    } else {
-        None
-    };
-
-    if let Some(ref f) = filter_str {
-        search.with_filter(f);
-    }
+    let mut main_filters = Vec::new();
+    if let Some(ref f) = venue_filter { main_filters.push(f.clone()); }
+    if let Some(ref f) = year_filter { main_filters.push(f.clone()); }
     
-use meilisearch_sdk::search::Selectors;
-
-    // Extend lifetime of facet_list to match search scope
-    let facet_list: Vec<&str>;
-
-    if let Some(ref facets) = params.facets {
-        facet_list = facets.split(',').map(|s| s.trim()).collect();
-        search.with_facets(Selectors::Some(&facet_list));
+    // Join filters with AND
+    let main_filter_str = main_filters.join(" AND ");
+    if !main_filters.is_empty() {
+        main_search.with_filter(&main_filter_str);
     }
 
     let limit = params.limit.unwrap_or(20);
-    search.with_limit(limit);
+    main_search.with_limit(limit);
 
     if let Some(page) = params.page {
-         let offset = (page.saturating_sub(1)) * limit;
-         search.with_offset(offset);
+        let offset = (page.saturating_sub(1)) * limit;
+        main_search.with_offset(offset);
+    }
+    
+    // We execute the main search
+    // We only ask for facets in main search if we strictly need them, 
+    // but we will overwrite them with disjunctive ones anyway.
+    
+    // --- Disjunctive Facet Searches ---
+    // We need to check which facets are requested
+    let mut requested_facets = Vec::new();
+    if let Some(ref facets) = params.facets {
+        requested_facets = facets.split(',').map(|s| s.trim()).collect();
     }
 
-    let results = search.execute::<PaperHit>().await.expect("Failed to execute search");
+    let do_venue_facet = requested_facets.contains(&"venue");
+    let do_year_facet = requested_facets.contains(&"year");
 
-    Json(serde_json::to_value(results).unwrap())
+    // We can run these concurrently.
+    // Note: 'search' builder borrows 'index'. We might need to create multiple searches.
+    // Since 'index' is just a struct wrapper (cheap to clone usually, or we just create it again), we can do that.
+    
+    let main_fut = main_search.execute::<PaperHit>();
+
+    let venue_fut = async {
+        if !do_venue_facet { return None; }
+        let mut search = index.search();
+        if let Some(ref q) = params.q { search.with_query(q); }
+        search.with_limit(0);
+        search.with_facets(Selectors::Some(&["venue"]));
+        
+        // Apply all filters EXCEPT venue
+        // For venue facet, we want to see distribution across ALL venues, filtered only by Year (and Query)
+        if let Some(ref f) = year_filter {
+            search.with_filter(f);
+        }
+        
+        search.execute::<PaperHit>().await.ok()
+    };
+
+    let year_fut = async {
+        if !do_year_facet { return None; }
+        let mut search = index.search();
+        if let Some(ref q) = params.q { search.with_query(q); }
+        search.with_limit(0);
+        search.with_facets(Selectors::Some(&["year"]));
+        
+        // Apply all filters EXCEPT year
+        if let Some(ref f) = venue_filter {
+            search.with_filter(f);
+        }
+        
+        search.execute::<PaperHit>().await.ok()
+    };
+
+    let (main_res, venue_res, year_res) = tokio::join!(main_fut, venue_fut, year_fut);
+
+    let mut finals = match main_res {
+        Ok(r) => r,
+        Err(e) => return Json(serde_json::json!({ "error": e.to_string() })),
+    };
+
+    // Merge facets
+    let mut combined_facets = std::collections::HashMap::new();
+
+    if let Some(v_res) = venue_res {
+        if let Some(dist) = v_res.facet_distribution {
+            if let Some(v_map) = dist.get("venue") {
+                combined_facets.insert("venue".to_string(), v_map.clone());
+            }
+        }
+    }
+    
+    if let Some(y_res) = year_res {
+         if let Some(dist) = y_res.facet_distribution {
+            if let Some(y_map) = dist.get("year") {
+                combined_facets.insert("year".to_string(), y_map.clone());
+            }
+        }
+    }
+
+    // Since SearchResults field is private/setup in a way that might be hard to mutate directly if we don't own it fully or if struct fields are pub.
+    // Meilisearch SDK SearchResults fields are public.
+    finals.facet_distribution = Some(combined_facets);
+
+    Json(serde_json::to_value(finals).unwrap())
 }
