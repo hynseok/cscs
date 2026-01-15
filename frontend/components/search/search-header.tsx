@@ -18,7 +18,7 @@ export function SearchHeader() {
                 <div className="flex-1 flex justify-center">
                     <SearchInput />
                 </div>
-                <div className="w-fit min-w-[100px] flex justify-end">
+                <div className="hidden md:flex w-fit min-w-[100px] justify-end">
                     {/* Placeholder for future user menu or stats */}
                 </div>
             </div>
