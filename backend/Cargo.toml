@@ -12,6 +12,9 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["full"] }
 tower-http = { version = "0.6.8", features = ["cors"] }
+redis = { version = "0.27.0", features = ["tokio-comp"] }
+sha2 = "0.10.8"
+hex = "0.4.3"
 
 [profile.release]
 opt-level = 3

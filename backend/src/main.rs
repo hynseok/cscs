@@ -9,11 +9,16 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
+use redis::AsyncCommands;
+use sha2::{Digest, Sha256};
+
+#[derive(Clone)]
 struct AppState {
     meili: Client,
+    redis: redis::Client,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct SearchParams {
     q: Option<String>,
     venue: Vec<String>,
@@ -40,8 +45,12 @@ async fn main() -> anyhow::Result<()> {
     let meili_url = std::env::var("MEILI_URL").unwrap_or("http://localhost:7700".into());
     let meili_key = std::env::var("MEILI_MASTER_KEY").expect("MEILI_MASTER_KEY must be set");
     
+    let redis_url = std::env::var("REDIS_URL").unwrap_or("redis://127.0.0.1:6379".into());
+    let redis_client = redis::Client::open(redis_url)?;
+
     let state = Arc::new(AppState {
         meili: Client::new(meili_url, Some(meili_key))?,
+        redis: redis_client,
     });
 
     let app = Router::new()
@@ -62,6 +71,8 @@ async fn search_papers(
     Query(raw_params): Query<Vec<(String, String)>>,
 ) -> Json<serde_json::Value> {
     // Parse parameters manually to handle repeated keys (arrays)
+    // We sort params to ensure deterministic cache key if we were using raw params,
+    // but here we parse into struct first.
     let mut params = SearchParams {
         q: None,
         venue: Vec::new(),
@@ -92,6 +103,27 @@ async fn search_papers(
             },
             "facets" => params.facets = Some(value),
             _ => {}
+        }
+    }
+    
+    // Sort vectors for deterministic cache key
+    params.venue.sort();
+    params.year.sort();
+
+    // Cache Check
+    let param_json = serde_json::to_string(&params).unwrap();
+    let mut hasher = Sha256::new();
+    hasher.update(param_json);
+    let cache_key = format!("search:{}", hex::encode(hasher.finalize()));
+
+    let mut con = state.redis.get_multiplexed_async_connection().await.ok();
+    
+    if let Some(ref mut c) = con {
+        if let Ok(cached) = c.get::<_, String>(&cache_key).await {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&cached) {
+                // println!("Cache Hit");
+                return Json(json);
+            }
         }
     }
 
@@ -205,6 +237,12 @@ async fn search_papers(
     }
 
     finals.facet_distribution = Some(combined_facets);
+    let response_json = serde_json::to_value(&finals).unwrap();
 
-    Json(serde_json::to_value(finals).unwrap())
+    // Cache Set
+    if let Some(mut c) = con {
+        let _ = c.set_ex::<_, _, String>(&cache_key, response_json.to_string(), 3600).await;
+    }
+
+    Json(response_json)
 }
