@@ -6,14 +6,19 @@ import { useSearch } from '@/hooks/use-search'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useInView } from 'react-intersection-observer'
 import { useQueryState, parseAsInteger } from 'nuqs'
+import { StatsDialog } from './stats-dialog'
 
 export function ResultList() {
     const { data, isLoading, isError, error } = useSearch()
 
     // Stats display
+    // Stats display
     const stats = data ? (
-        <div className="text-sm text-muted-foreground mb-4">
-            Found {data.estimatedTotalHits.toLocaleString()} results ({data.processingTimeMs}ms)
+        <div className="flex items-center justify-between mb-4">
+            <div className="text-sm text-muted-foreground">
+                Found {data.estimatedTotalHits.toLocaleString()} results ({data.processingTimeMs}ms)
+            </div>
+            <StatsDialog />
         </div>
     ) : null
 
