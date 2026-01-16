@@ -27,7 +27,7 @@ export function MobileFilter() {
                 <SheetHeader>
                     <SheetTitle>Filters</SheetTitle>
                 </SheetHeader>
-                <div className="mt-4">
+                <div className="mt-4 px-4">
                     <FilterSidebar />
                 </div>
             </SheetContent>
