@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     let addr = "0.0.0.0:8080";
-    println!("High-performance Search API running on {}", addr);
+    println!("CSCS Search API running on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 
@@ -171,6 +171,9 @@ async fn search_papers(
         let offset = (page.saturating_sub(1)) * limit;
         main_search.with_offset(offset);
     }
+    
+    // Enable Highlighting
+    main_search.with_attributes_to_highlight(Selectors::Some(&["title", "venue", "authors"]));
     
     let mut requested_facets = Vec::new();
     if let Some(ref facets) = params.facets {

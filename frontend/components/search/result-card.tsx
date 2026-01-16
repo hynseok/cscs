@@ -12,20 +12,27 @@ export function ResultCard({ paper }: { paper: Paper }) {
                         target="_blank"
                         rel="noopener noreferrer"
                         className="hover:underline decoration-primary decoration-2 underline-offset-4 text-primary"
-                    >
-                        {paper.title}
-                    </a>
+                        dangerouslySetInnerHTML={{
+                            __html: paper._formatted?.title || paper.title
+                        }}
+                    />
                 </CardTitle>
             </CardHeader>
             <CardContent>
-                <div className="text-sm text-muted-foreground mb-2">
-                    {paper.authors.join(', ')}
-                </div>
+                <div
+                    className="text-sm text-muted-foreground mb-2"
+                    dangerouslySetInnerHTML={{
+                        __html: (paper._formatted?.authors || paper.authors).join(', ')
+                    }}
+                />
                 <div className="flex items-center gap-2 text-xs">
                     <Badge variant="secondary" className="font-normal">
-                        {paper.venue}
+                        <span dangerouslySetInnerHTML={{ __html: paper._formatted?.venue || paper.venue }} />
                     </Badge>
-                    <span className="text-muted-foreground">{paper.year}</span>
+                    <span
+                        className="text-muted-foreground"
+                        dangerouslySetInnerHTML={{ __html: String(paper._formatted?.year || paper.year) }}
+                    />
                 </div>
             </CardContent>
         </Card>
