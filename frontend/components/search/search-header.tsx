@@ -15,7 +15,7 @@ export function SearchHeader() {
                         Computer Science Conference paper Searcher
                     </div>
                 </a>
-                <div className="flex-1 flex justify-center">
+                <div className="flex-1 flex justify-start ml-2 md:ml-4">
                     <SearchInput />
                 </div>
                 <div className="hidden md:flex w-fit min-w-[100px] justify-end">
