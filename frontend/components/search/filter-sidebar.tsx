@@ -6,10 +6,12 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Separator } from '@/components/ui/separator'
+import { cn } from '@/lib/utils'
 import { useSearch } from '@/hooks/use-search'
 
 export function FilterSidebar() {
-    const { data, isLoading } = useSearch()
+    const { data, isLoading, sort, setSort } = useSearch()
 
     // NOTE: If facets are null, we might want to fallback or just show empty.
     // Assuming facets are returned in facetDistribution.
@@ -18,6 +20,24 @@ export function FilterSidebar() {
 
     return (
         <div className="space-y-6">
+            <div className="space-y-3">
+                <h3 className="font-semibold">Sort by</h3>
+                <div className="flex flex-col space-y-1">
+                    <button
+                        onClick={() => setSort('relevance')}
+                        className={cn("text-sm text-left px-2 py-1.5 rounded-md transition-colors", sort === 'relevance' ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:text-foreground hover:bg-accent/50")}
+                    >
+                        Relevance
+                    </button>
+                    <button
+                        onClick={() => setSort('year')}
+                        className={cn("text-sm text-left px-2 py-1.5 rounded-md transition-colors", sort === 'year' ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:text-foreground hover:bg-accent/50")}
+                    >
+                        Date
+                    </button>
+                </div>
+            </div>
+            <Separator />
             <FilterSection
                 title="Venue"
                 paramKey="venue"

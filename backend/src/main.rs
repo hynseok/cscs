@@ -26,6 +26,7 @@ struct SearchParams {
     limit: Option<usize>,
     page: Option<usize>,
     facets: Option<String>,
+    sort: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -44,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
 
     let meili_url = std::env::var("MEILI_URL").unwrap_or("http://localhost:7700".into());
     let meili_key = std::env::var("MEILI_MASTER_KEY").expect("MEILI_MASTER_KEY must be set");
-    
+
     let redis_url = std::env::var("REDIS_URL").unwrap_or("redis://127.0.0.1:6379".into());
     let redis_client = redis::Client::open(redis_url)?;
 
@@ -80,6 +81,7 @@ async fn search_papers(
         limit: None,
         page: None,
         facets: None,
+        sort: None,
     };
 
     for (key, value) in raw_params {
@@ -102,10 +104,11 @@ async fn search_papers(
                 }
             },
             "facets" => params.facets = Some(value),
+            "sort" => params.sort = Some(value),
             _ => {}
         }
     }
-    
+
     // Sort vectors for deterministic cache key
     params.venue.sort();
     params.year.sort();
@@ -170,6 +173,13 @@ async fn search_papers(
     if let Some(page) = params.page {
         let offset = (page.saturating_sub(1)) * limit;
         main_search.with_offset(offset);
+    }
+
+    // Sorting
+    if let Some(ref s) = params.sort {
+        if s == "year" {
+             main_search.with_sort(&["year:desc"]);
+        }
     }
     
     // Enable Highlighting

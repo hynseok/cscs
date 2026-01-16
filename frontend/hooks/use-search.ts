@@ -31,12 +31,14 @@ export function useSearch() {
     const [venue] = useQueryState('venue', parseAsArrayOf(parseAsString).withDefault([]))
     const [year] = useQueryState('year', parseAsArrayOf(parseAsString).withDefault([]))
     const [page] = useQueryState('page', parseAsInteger.withDefault(1))
+    const [sort, setSort] = useQueryState('sort', parseAsString.withDefault('relevance'))
 
     const searchParams = {
         q,
         venue,
         year,
-        page
+        page,
+        sort
     }
 
     const query = useQuery<SearchResponse>({
@@ -50,6 +52,9 @@ export function useSearch() {
             venue.forEach(v => params.append('venue', v))
             year.forEach(y => params.append('year', y))
             params.set('page', page.toString())
+            if (sort === 'year') {
+                params.set('sort', 'year')
+            }
 
             // Request facets explicitly as comma separated string for backend
             params.set('facets', 'venue,year')
@@ -64,6 +69,8 @@ export function useSearch() {
 
     return {
         ...query,
-        searchParams
+        searchParams,
+        sort,
+        setSort
     }
 }
