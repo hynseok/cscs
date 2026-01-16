@@ -9,6 +9,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import { useSearch } from '@/hooks/use-search'
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { VENUE_FULL_NAMES } from '@/constants/venue-names'
 
 export function FilterSidebar() {
     const { data, isLoading, sort, setSort } = useSearch()
@@ -113,22 +120,43 @@ function FilterSection({
                 )}
             </div>
             <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                {entries.map(([label, count]) => (
-                    <div key={label} className="flex items-center space-x-2">
-                        <Checkbox
-                            id={`${paramKey}-${label}`}
-                            checked={selected.includes(label)}
-                            onCheckedChange={() => toggle(label)}
-                        />
-                        <Label
-                            htmlFor={`${paramKey}-${label}`}
-                            className="flex-1 cursor-pointer text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 flex justify-between"
-                        >
-                            <span>{label}</span>
-                            <span className="text-xs text-muted-foreground ml-2">{count}</span>
-                        </Label>
-                    </div>
-                ))}
+                <TooltipProvider delayDuration={300}>
+                    {entries.map(([label, count]) => {
+                        const fullName = paramKey === 'venue' ? VENUE_FULL_NAMES[label] : null
+
+                        const content = (
+                            <div className="flex items-center space-x-2">
+                                <Checkbox
+                                    id={`${paramKey}-${label}`}
+                                    checked={selected.includes(label)}
+                                    onCheckedChange={() => toggle(label)}
+                                />
+                                <Label
+                                    htmlFor={`${paramKey}-${label}`}
+                                    className="flex-1 cursor-pointer text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 flex justify-between"
+                                >
+                                    <span>{label}</span>
+                                    <span className="text-xs text-muted-foreground ml-2">{count}</span>
+                                </Label>
+                            </div>
+                        )
+
+                        if (fullName) {
+                            return (
+                                <Tooltip key={label}>
+                                    <TooltipTrigger asChild>
+                                        {content}
+                                    </TooltipTrigger>
+                                    <TooltipContent side="right" className="max-w-[300px] bg-popover text-popover-foreground border shadow-md">
+                                        <p>{fullName}</p>
+                                    </TooltipContent>
+                                </Tooltip>
+                            )
+                        }
+
+                        return <div key={label}>{content}</div>
+                    })}
+                </TooltipProvider>
             </div>
         </div>
     )
