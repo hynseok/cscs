@@ -21,11 +21,13 @@ export function SearchInput() {
   }, [q]);
 
   // Sync Debounced value to URL
+  // Sync Debounced value to URL
   React.useEffect(() => {
     if (debouncedValue !== q) {
       setQ(debouncedValue || null);
     }
-  }, [debouncedValue, setQ, q]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedValue, setQ]);
 
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
