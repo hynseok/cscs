@@ -7,6 +7,15 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useInView } from 'react-intersection-observer'
 import { useQueryState, parseAsInteger } from 'nuqs'
 import { StatsDialog } from './stats-dialog'
+import {
+    Pagination,
+    PaginationContent,
+    PaginationEllipsis,
+    PaginationItem,
+    PaginationLink,
+    PaginationNext,
+    PaginationPrevious,
+} from "@/components/ui/pagination"
 
 export function ResultList() {
     const { data, isLoading, isError, error } = useSearch()
@@ -63,30 +72,101 @@ export function ResultList() {
     )
 }
 
+
 function PaginationControl() {
     const [page, setPage] = useQueryState('page', parseAsInteger.withDefault(1))
     const { data } = useSearch()
 
-    const handleNext = () => setPage(page + 1)
-    const handlePrev = () => setPage(Math.max(1, page - 1))
+    if (!data) return null
+
+    const pageSize = 20
+    const totalPages = Math.ceil(data.estimatedTotalHits / pageSize)
+
+    if (totalPages <= 1) return null
+
+    const getPageNumbers = () => {
+        const pages = []
+        // Simple logic: always show 1, ..., current-1, current, current+1, ..., last
+        // But let's stick to a robust simple window for now
+        // 1 2 3 4 5 ... 10
+        // 1 ... 4 5 6 ... 10
+        // 1 ... 6 7 8 9 10
+
+        const showMax = 5;
+        // Logic: Try to center current page
+        let startPage = Math.max(1, page - 2);
+        let endPage = Math.min(totalPages, startPage + showMax - 1);
+
+        // Adjust if we hit the end
+        if (endPage - startPage + 1 < showMax) {
+            startPage = Math.max(1, endPage - showMax + 1);
+        }
+
+        if (startPage > 1) {
+            pages.push(1);
+            if (startPage > 2) pages.push('ellipsis');
+        }
+
+        for (let i = startPage; i <= endPage; i++) {
+            pages.push(i);
+        }
+
+        if (endPage < totalPages) {
+            if (endPage < totalPages - 1) pages.push('ellipsis');
+            pages.push(totalPages);
+        }
+
+        return pages;
+    }
+
+    const pageNumbers = getPageNumbers()
 
     return (
-        <div className="flex items-center gap-4 mt-8 justify-center">
-            <button
-                onClick={handlePrev}
-                disabled={page === 1}
-                className="px-4 py-2 text-sm border rounded hover:bg-accent disabled:opacity-50"
-            >
-                Previous
-            </button>
-            <span className="text-sm">Page {page}</span>
-            <button
-                onClick={handleNext}
-                disabled={!data?.hits || data.hits.length === 0}
-                className="px-4 py-2 text-sm border rounded hover:bg-accent disabled:opacity-50"
-            >
-                Next
-            </button>
-        </div>
+        <Pagination className="mt-8">
+            <PaginationContent>
+                <PaginationItem>
+                    <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                            e.preventDefault()
+                            if (page > 1) setPage(page - 1)
+                        }}
+                        aria-disabled={page <= 1}
+                        className={page <= 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                    />
+                </PaginationItem>
+
+                {pageNumbers.map((p, i) => (
+                    <PaginationItem key={i}>
+                        {p === 'ellipsis' ? (
+                            <PaginationEllipsis />
+                        ) : (
+                            <PaginationLink
+                                href="#"
+                                isActive={page === p}
+                                onClick={(e) => {
+                                    e.preventDefault()
+                                    setPage(p as number)
+                                }}
+                            >
+                                {p}
+                            </PaginationLink>
+                        )}
+                    </PaginationItem>
+                ))}
+
+                <PaginationItem>
+                    <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                            e.preventDefault()
+                            if (page < totalPages) setPage(page + 1)
+                        }}
+                        aria-disabled={page >= totalPages}
+                        className={page >= totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                    />
+                </PaginationItem>
+            </PaginationContent>
+        </Pagination>
     )
 }
