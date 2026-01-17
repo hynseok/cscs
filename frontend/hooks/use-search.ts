@@ -9,12 +9,14 @@ export interface Paper {
     year: number
     ee_link: string
     dblp_key: string
+    citation_count?: number
     _formatted?: {
         title: string
         venue: string
         authors: string[]
         year: string | number
         dblp_key?: string
+        citation_count?: number
     }
 }
 

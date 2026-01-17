@@ -49,6 +49,10 @@ export function ResultCard({ paper }: { paper: Paper }) {
                         className="text-muted-foreground"
                         dangerouslySetInnerHTML={{ __html: String(paper._formatted?.year || paper.year) }}
                     />
+                    <span className="text-muted-foreground mx-1">•</span>
+                    <span className="text-muted-foreground">
+                        Cited by {paper._formatted?.citation_count || paper.citation_count || 0}
+                    </span>
                     <div className="ml-auto">
                         <BibtexDialog paper={paper} />
                     </div>

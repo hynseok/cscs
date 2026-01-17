@@ -7,6 +7,7 @@ use sqlx::{Pool, Postgres};
 use std::collections::HashMap;
 use std::env;
 use urlencoding::encode;
+use serde::Deserialize;
 
 static VENUE_MAP: Lazy<HashMap<String, String>> = Lazy::new(|| {
     let mut m = HashMap::new();
@@ -102,7 +103,21 @@ struct Paper {
     venue: String,
     dblp_key: String,
     ee_links: Vec<String>,
+    citation_count: i32,
 }
+
+
+#[derive(Deserialize, Debug)]
+struct OpenAlexResponse {
+    results: Vec<OpenAlexWork>,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAlexWork {
+    doi: Option<String>,
+    cited_by_count: Option<i32>,
+}
+
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -125,6 +140,8 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
     let mut year_str = String::new();
     let mut batch: Vec<Paper> = Vec::with_capacity(1000);
     let skip_tags = ["i", "sub", "sup", "tt", "ref", "span", "br"];
+    
+    let http_client = reqwest::Client::new();
 
     println!("Start Parsing...");
 
@@ -147,6 +164,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
                             venue: String::new(),
                             dblp_key: key,
                             ee_links: Vec::new(),
+                            citation_count: 0,
                         });
                         current_tag = tag_name;
                     }
@@ -199,6 +217,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
                             paper.venue = canonical;
                             batch.push(paper);
                             if batch.len() >= 1000 {
+                                fetch_citation_counts(&http_client, &mut batch).await?;
                                 insert_batch(pool, &mut batch).await?;
                                 print!(".");
                                 std::io::Write::flush(&mut std::io::stdout())?;
@@ -216,6 +235,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
         buf.clear();
     }
     if !batch.is_empty() {
+        fetch_citation_counts(&http_client, &mut batch).await?;
         insert_batch(pool, &mut batch).await?;
     }
     Ok(())
@@ -239,6 +259,76 @@ fn get_canonical(paper: &Paper) -> Option<String> {
         return Some(canonical.clone());
     }
     None
+}
+
+fn extract_doi(url: &str) -> Option<String> {
+    // Basic extraction: find "10." and take the rest
+    if let Some(idx) = url.find("10.") {
+        return Some(url[idx..].to_string());
+    }
+    None
+}
+
+async fn fetch_citation_counts(client: &reqwest::Client, batch: &mut Vec<Paper>) -> Result<()> {
+    let base_url = "https://api.openalex.org/works";
+
+    // Chunk into 50 to avoid URL length issues
+    for chunk in batch.chunks_mut(50) {
+        let mut doi_map: Vec<(usize, String)> = Vec::with_capacity(chunk.len());
+        
+        for (i, p) in chunk.iter().enumerate() {
+            for link in &p.ee_links {
+                if link.contains("doi.org") || link.contains("10.") {
+                     if let Some(doi) = extract_doi(link) {
+                        doi_map.push((i, doi));
+                        break; 
+                    }
+                }
+            }
+        }
+
+        if doi_map.is_empty() {
+            continue;
+        }
+
+        let dois: Vec<String> = doi_map.iter().map(|(_, doi)| doi.clone()).collect();
+        // filter=doi:A|B|C
+        let filter_val = dois.join("|");
+        let query_url = format!("{}?filter=doi:{}&select=doi,cited_by_count&per_page=50", base_url, filter_val);
+
+        // OpenAlex is generally open, email in User-Agent is polite.
+        let res = client.get(&query_url)
+            .header("User-Agent", "ScholarSearch/1.0 (mailto:test@example.com)") 
+            .send().await;
+
+        if let Ok(resp) = res {
+             if resp.status().is_success() {
+                  let oa_resp: OpenAlexResponse = resp.json().await.unwrap_or_else(|_| OpenAlexResponse { results: vec![] });
+                  
+                  for work in oa_resp.results {
+                      if let Some(work_doi) = work.doi {
+                          let work_doi_clean = extract_doi(&work_doi).unwrap_or_default();
+                          if work_doi_clean.is_empty() { continue; }
+
+                          for (idx, original_doi) in &doi_map {
+                              // Simple string match might be enough if format is standard
+                              if *original_doi == work_doi_clean {
+                                  if let Some(count) = work.cited_by_count {
+                                      chunk[*idx].citation_count = count;
+                                  }
+                              }
+                          }
+                      }
+                  }
+             } else {
+                 eprintln!("OpenAlex API Error: {}", resp.status());
+             }
+        }
+        
+        // Polite delay
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+    Ok(())
 }
 
 async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<()> {
@@ -279,7 +369,7 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
         };
 
         let v_id: i32 = sqlx::query_scalar("INSERT INTO venues (raw_name) VALUES ($1) ON CONFLICT (raw_name) DO UPDATE SET raw_name = EXCLUDED.raw_name RETURNING id").bind(&paper.venue).fetch_one(&mut *tx).await?;
-        let p_id: i32 = sqlx::query_scalar("INSERT INTO papers (venue_id, title, year, ee_link, dblp_key) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (dblp_key) DO UPDATE SET title = EXCLUDED.title RETURNING id").bind(v_id).bind(&paper.title).bind(paper.year).bind(&ee_link).bind(&paper.dblp_key).fetch_one(&mut *tx).await?;
+        let p_id: i32 = sqlx::query_scalar("INSERT INTO papers (venue_id, title, year, ee_link, dblp_key, citation_count) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (dblp_key) DO UPDATE SET title = EXCLUDED.title, citation_count = EXCLUDED.citation_count RETURNING id").bind(v_id).bind(&paper.title).bind(paper.year).bind(&ee_link).bind(&paper.dblp_key).bind(paper.citation_count).fetch_one(&mut *tx).await?;
         for (idx, name) in paper.authors.iter().enumerate() {
             let a_id: i32 = sqlx::query_scalar("INSERT INTO authors (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id").bind(name).fetch_one(&mut *tx).await?;
             sqlx::query("INSERT INTO paper_authors (paper_id, author_id, author_order) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING").bind(p_id).bind(a_id).bind(idx as i32).execute(&mut *tx).await?;

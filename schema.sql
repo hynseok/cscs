@@ -20,7 +20,8 @@ CREATE TABLE papers (
     title TEXT NOT NULL,
     year INT,
     ee_link TEXT,
-    dblp_key TEXT UNIQUE NOT NULL
+    dblp_key TEXT UNIQUE NOT NULL,
+    citation_count INT DEFAULT 0
 );
 
 CREATE TABLE paper_authors (

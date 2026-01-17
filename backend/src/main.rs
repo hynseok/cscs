@@ -38,6 +38,7 @@ struct PaperHit {
     authors: Vec<String>,
     ee_link: Option<String>,
     dblp_key: String,
+    citation_count: i32,
 }
 
 #[tokio::main]

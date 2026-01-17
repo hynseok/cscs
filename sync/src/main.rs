@@ -12,6 +12,7 @@ struct PaperDoc {
     authors: Vec<String>,
     ee_link: Option<String>,
     dblp_key: String,
+    citation_count: i32,
 }
 
 #[tokio::main]
@@ -33,13 +34,13 @@ async fn main() -> anyhow::Result<()> {
     loop {
         let rows = sqlx::query!(
             r#"
-            SELECT p.id, p.title, p.year, p.ee_link, p.dblp_key, v.raw_name as venue, 
+            SELECT p.id, p.title, p.year, p.ee_link, p.dblp_key, p.citation_count, v.raw_name as venue, 
                    ARRAY_AGG(a.name) as "authors!"
             FROM papers p
             JOIN venues v ON p.venue_id = v.id
             JOIN paper_authors pa ON p.id = pa.paper_id
             JOIN authors a ON pa.author_id = a.id
-            GROUP BY p.id, v.raw_name, p.ee_link, p.dblp_key
+            GROUP BY p.id, v.raw_name, p.ee_link, p.dblp_key, p.citation_count
             ORDER BY p.id ASC
             LIMIT $1 OFFSET $2
             "#,
@@ -63,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
                 authors: r.authors,
                 ee_link: r.ee_link,
                 dblp_key: r.dblp_key,
+                citation_count: r.citation_count.unwrap_or(0),
             })
             .collect();
 
@@ -82,7 +84,7 @@ async fn setup_meili_settings(client: &Client, index: &Index) -> anyhow::Result<
     let task = index.set_filterable_attributes(["venue", "year"]).await?;
     task.wait_for_completion(client, None, None).await?;
 
-    let task = index.set_sortable_attributes(["year"]).await?;
+    let task = index.set_sortable_attributes(["year", "citation_count"]).await?;
     task.wait_for_completion(client, None, None).await?;
 
     let task = index
