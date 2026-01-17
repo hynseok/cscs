@@ -43,7 +43,7 @@ export function FilterSidebar() {
                         Date
                     </button>
                     <button
-                        onClick={() => setSort('citation_count_desc')}
+                        onClick={() => setSort('citation_count')}
                         className={cn("text-sm text-left px-2 py-1.5 rounded-md transition-colors", sort === 'citation_count_desc' ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:text-foreground hover:bg-accent/50")}
                     >
                         Citation Count
