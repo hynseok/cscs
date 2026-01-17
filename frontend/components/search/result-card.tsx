@@ -65,7 +65,7 @@ export function ResultCard({ paper }: { paper: Paper }) {
                             onClick={() => openGemini(paper)}
                         >
                             <Sparkles className="w-3 h-3" />
-                            Ask Gemini
+                            Gemini Insight
                         </Button>
                         <BibtexDialog paper={paper} />
                     </div>
