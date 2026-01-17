@@ -178,11 +178,11 @@ async fn search_papers(
     }
 
     // Sorting
-    if let Some(ref s) = params.sort {
-        if s == "year" {
-             main_search.with_sort(&["year:desc"]);
-        }
-    }
+        match s.as_str() {
+            "year" => main_search.with_sort(&["year:desc"]),
+            "citation_count_desc" => main_search.with_sort(&["citation_count:desc"]),
+            _ => &mut main_search,
+        };
     
     // Enable Highlighting
     main_search.with_attributes_to_highlight(Selectors::Some(&["title", "venue", "authors"]));

@@ -56,8 +56,8 @@ export function useSearch() {
             venue.forEach(v => params.append('venue', v))
             year.forEach(y => params.append('year', y))
             params.set('page', page.toString())
-            if (sort === 'year') {
-                params.set('sort', 'year')
+            if (sort && sort !== 'relevance') {
+                params.set('sort', sort)
             }
 
             // Request facets explicitly as comma separated string for backend
