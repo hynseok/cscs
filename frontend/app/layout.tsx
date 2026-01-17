@@ -12,6 +12,9 @@ const fontCheck = Outfit({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: "CSCS - Computer Science Conference paper Searcher",
   description: "Instant access to 400,000+ academic papers.",
+  verification: {
+    google: process.env.GOOGLE_SITE_VERIFICATION,
+  },
 };
 
 export default function RootLayout({
