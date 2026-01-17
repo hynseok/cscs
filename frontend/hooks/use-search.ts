@@ -8,11 +8,13 @@ export interface Paper {
     venue: string
     year: number
     ee_link: string
+    dblp_key: string
     _formatted?: {
         title: string
         venue: string
         authors: string[]
         year: string | number
+        dblp_key?: string
     }
 }
 

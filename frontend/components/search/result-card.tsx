@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Paper } from '@/hooks/use-search'
 import { useQueryState } from 'nuqs'
 import React from 'react'
+import { BibtexDialog } from './bibtex-dialog'
 
 export function ResultCard({ paper }: { paper: Paper }) {
     const [, setQ] = useQueryState('q')
@@ -48,6 +49,9 @@ export function ResultCard({ paper }: { paper: Paper }) {
                         className="text-muted-foreground"
                         dangerouslySetInnerHTML={{ __html: String(paper._formatted?.year || paper.year) }}
                     />
+                    <div className="ml-auto">
+                        <BibtexDialog paper={paper} />
+                    </div>
                 </div>
             </CardContent>
         </Card>

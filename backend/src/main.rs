@@ -37,6 +37,7 @@ struct PaperHit {
     venue: String,
     authors: Vec<String>,
     ee_link: Option<String>,
+    dblp_key: String,
 }
 
 #[tokio::main]
