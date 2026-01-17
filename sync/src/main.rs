@@ -11,6 +11,7 @@ struct PaperDoc {
     venue: String,
     authors: Vec<String>,
     ee_link: Option<String>,
+    dblp_key: String,
 }
 
 #[tokio::main]
@@ -32,13 +33,13 @@ async fn main() -> anyhow::Result<()> {
     loop {
         let rows = sqlx::query!(
             r#"
-            SELECT p.id, p.title, p.year, p.ee_link, v.raw_name as venue, 
+            SELECT p.id, p.title, p.year, p.ee_link, p.dblp_key, v.raw_name as venue, 
                    ARRAY_AGG(a.name) as "authors!"
             FROM papers p
             JOIN venues v ON p.venue_id = v.id
             JOIN paper_authors pa ON p.id = pa.paper_id
             JOIN authors a ON pa.author_id = a.id
-            GROUP BY p.id, v.raw_name, p.ee_link
+            GROUP BY p.id, v.raw_name, p.ee_link, p.dblp_key
             ORDER BY p.id ASC
             LIMIT $1 OFFSET $2
             "#,
@@ -61,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
                 venue: r.venue,
                 authors: r.authors,
                 ee_link: r.ee_link,
+                dblp_key: r.dblp_key,
             })
             .collect();
 
