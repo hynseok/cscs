@@ -85,7 +85,7 @@ export function BibtexDialog({ paper }: { paper: Paper }) {
     )
 }
 
-function generateFallbackBibtex(paper: Paper) {
+export function generateFallbackBibtex(paper: Paper) {
     const dblpKey = paper.dblp_key || paper._formatted?.dblp_key
     return `@inproceedings{${dblpKey || `conf/${paper.venue.toLowerCase()}/${paper.year}`},
   author    = {${paper.authors.join(' and ')}},

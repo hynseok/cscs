@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import { NuqsAdapter } from 'nuqs/adapters/next/app'
 import "./globals.css";
 import { Providers } from "./providers";
+import { GeminiPanel } from "@/components/gemini-panel";
 
 // const fontCheck = Inter({ subsets: ["latin"] });
 const fontCheck = Outfit({ subsets: ["latin"] });
@@ -24,6 +25,7 @@ export default function RootLayout({
         <NuqsAdapter>
           <Providers>
             {children}
+            <GeminiPanel />
           </Providers>
         </NuqsAdapter>
       </body>

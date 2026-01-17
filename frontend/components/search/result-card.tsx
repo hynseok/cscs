@@ -6,9 +6,13 @@ import { Paper } from '@/hooks/use-search'
 import { useQueryState } from 'nuqs'
 import React from 'react'
 import { BibtexDialog } from './bibtex-dialog'
+import { useGemini } from '@/context/gemini-context'
+import { Sparkles } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 
 export function ResultCard({ paper }: { paper: Paper }) {
     const [, setQ] = useQueryState('q')
+    const { openGemini } = useGemini()
 
     return (
         <Card className="hover:bg-accent/5 transition-colors border-transparent hover:border-border">
@@ -53,7 +57,16 @@ export function ResultCard({ paper }: { paper: Paper }) {
                     <span className="text-muted-foreground">
                         Cited by {paper._formatted?.citation_count || paper.citation_count || 0}
                     </span>
-                    <div className="ml-auto">
+                    <div className="ml-auto flex items-center gap-2">
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs text-muted-foreground hover:text-primary gap-1"
+                            onClick={() => openGemini(paper)}
+                        >
+                            <Sparkles className="w-3 h-3" />
+                            Ask Gemini
+                        </Button>
                         <BibtexDialog paper={paper} />
                     </div>
                 </div>
