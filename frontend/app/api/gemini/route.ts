@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
             return new NextResponse(stream, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Cache': 'HIT' } })
         }
 
-        const models = ['gemini-3-flash-preview', 'gemini-2-flash', 'gemma-3-27b-it']
+        const models = ['gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemma-3-27b-it']
 
         let result = null
         let lastError = null
@@ -59,6 +59,8 @@ Here is the BibTeX for a computer science paper:
 \`\`\`bibtex
 ${bibtex}
 \`\`\`
+
+Do not include "Based on the BibTeX, ..." in your response.
 `
 
         for (const modelName of models) {
