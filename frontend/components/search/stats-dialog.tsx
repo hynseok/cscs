@@ -42,62 +42,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
     return null
 }
 
-const VENUE_FIELDS: Record<string, string> = {
-    // AI
-    "AAAI": "AI", "IJCAI": "AI",
-    // Vision
-    "CVPR": "Vision", "ECCV": "Vision", "ICCV": "Vision",
-    // ML
-    "ICML": "ML", "KDD": "ML", "ICLR": "ML", "NeurIPS": "ML", "NIPS": "ML",
-    // NLP
-    "ACL": "NLP", "EMNLP": "NLP", "NAACL": "NLP",
-    // Web & IR
-    "SIGIR": "Web & IR", "WWW": "Web & IR",
-    // Arch
-    "ASPLOS": "Arch", "ISCA": "Arch", "MICRO": "Arch", "HPCA": "Arch",
-    // Networks
-    "SIGCOMM": "Networks", "NSDI": "Networks",
-    // Security
-    "CCS": "Security", "S&P": "Security", "USENIX Security": "Security", "NDSS": "Security", "PETS": "Security",
-    // DB
-    "SIGMOD": "DB", "VLDB": "DB", "ICDE": "DB", "PODS": "DB",
-    // HPC
-    "SC": "HPC", "HPDC": "HPC", "ICS": "HPC",
-    // Mobile
-    "MobiCom": "Mobile", "MobiSys": "Mobile", "SenSys": "Mobile",
-    // Metrics
-    "IMC": "Metrics", "SIGMETRICS": "Metrics",
-    // OS
-    "SOSP": "OS", "OSDI": "OS", "FAST": "OS", "USENIX ATC": "OS", "EuroSys": "OS", "ATC": "OS",
-    // PL
-    "PLDI": "PL", "POPL": "PL", "ICFP": "PL", "OOPSLA": "PL",
-    // SE
-    "FSE": "SE", "ICSE": "SE", "ASE": "SE", "ISSTA": "SE",
-    // Theory
-    "FOCS": "Theory", "SODA": "Theory", "STOC": "Theory",
-    // Crypto
-    "CRYPTO": "Crypto", "EUROCRYPT": "Crypto",
-    // Logic
-    "CAV": "Logic", "LICS": "Logic",
-    // Graphics
-    "SIGGRAPH": "Graphics", "Eurographics": "Graphics",
-    // HCI
-    "CHI": "HCI", "UbiComp": "HCI", "UIST": "HCI",
-    // Robotics
-    "ICRA": "Robotics", "IROS": "Robotics", "RSS": "Robotics",
-    // Comp. Bio
-    "ISMB": "Comp. Bio", "RECOMB": "Comp. Bio",
-    // EDA
-    "DAC": "EDA", "ICCAD": "EDA",
-    // Embedded
-    "EMSOFT": "Embedded", "RTAS": "Embedded", "RTSS": "Embedded",
-    // Vis
-    "VIS": "Visualization", "VR": "Visualization",
-    // ECom
-    "EC": "ECom", "WINE": "ECom",
-    // CSEd
-    "SIGCSE": "CSEd"
-}
+import { VENUE_FIELDS } from '@/constants/venue-categories'
 
 // Muted / Professional Palette (Tailwind 500/600 mix - readable but not neon)
 const COLORS = [
