@@ -34,7 +34,10 @@ export async function POST(req: NextRequest) {
             return new NextResponse(stream, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Cache': 'HIT' } })
         }
 
-        const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' })
+        const models = ['gemini-3-flash-preview', 'gemini-2-flash', 'gemma-3-27b-it']
+
+        let result = null
+        let lastError = null
 
         const prompt = `
 Please provide a concise explanation of this paper in English.
@@ -58,7 +61,36 @@ ${bibtex}
 \`\`\`
 `
 
-        const result = await model.generateContentStream(prompt)
+        for (const modelName of models) {
+            try {
+                console.log(`Attempting to generate with model: ${modelName}`)
+                const model = genAI.getGenerativeModel({ model: modelName })
+                result = await model.generateContentStream(prompt)
+
+                // If we get here, it worked
+                break
+            } catch (error: any) {
+                console.warn(`Failed with model ${modelName}:`, error.message)
+                lastError = error
+
+                // Check if it's a rate limit or quota error
+                const isRateLimit =
+                    error.response?.status === 429 ||
+                    error.message?.includes('429') ||
+                    error.message?.includes('Resource exhausted') ||
+                    error.message?.includes('Too Many Requests')
+
+                if (!isRateLimit) {
+                    // If it's not a rate limit issue (e.g., bad request, auth error), stop trying
+                    throw error
+                }
+                // Otherwise continue to next model
+            }
+        }
+
+        if (!result) {
+            throw lastError || new Error('All models failed to generate content')
+        }
 
         // 2. Stream & Cache Strategy
         const { stream: originalStream } = result
@@ -72,18 +104,22 @@ ${bibtex}
 
         const stream = new ReadableStream({
             async start(controller) {
-                for await (const chunk of originalStream) {
-                    const chunkText = chunk.text()
-                    if (chunkText) {
-                        fullText += chunkText
-                        controller.enqueue(encoder.encode(chunkText))
+                try {
+                    for await (const chunk of originalStream) {
+                        const chunkText = chunk.text()
+                        if (chunkText) {
+                            fullText += chunkText
+                            controller.enqueue(encoder.encode(chunkText))
+                        }
                     }
-                }
-                controller.close()
+                    controller.close()
 
-                // 3. Save to Redis on completion
-                if (fullText) {
-                    await redis.set(cacheKey, fullText, 'EX', 60 * 60 * 24 * 30) // 30 days
+                    // 3. Save to Redis on completion
+                    if (fullText) {
+                        await redis.set(cacheKey, fullText, 'EX', 60 * 60 * 24 * 30) // 30 days
+                    }
+                } catch (streamError) {
+                    controller.error(streamError)
                 }
             }
         })
