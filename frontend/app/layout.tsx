@@ -6,6 +6,7 @@ import "./globals.css";
 import { Providers } from "./providers";
 import { GeminiPanel } from "@/components/gemini-panel";
 import { JsonLd } from "@/components/json-ld";
+import { SiteFooter } from "@/components/site-footer";
 
 // const fontCheck = Inter({ subsets: ["latin"] });
 const fontCheck = Outfit({ subsets: ["latin"] });
@@ -56,14 +57,17 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${fontCheck.className} antialiased min-h-screen bg-background text-foreground`}>
+      <body className={`${fontCheck.className} antialiased min-h-screen flex flex-col bg-background text-foreground`}>
         <JsonLd />
         <NuqsAdapter>
           <Providers>
-            {children}
+            <main className="flex-1">
+              {children}
+            </main>
             <GeminiPanel />
           </Providers>
         </NuqsAdapter>
+        <SiteFooter />
       </body>
     </html>
   );
