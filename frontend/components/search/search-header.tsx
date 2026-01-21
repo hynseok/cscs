@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import { SearchInput } from './search-input'
+import { Github } from 'lucide-react'
 
 export function SearchHeader() {
     return (
@@ -19,7 +20,15 @@ export function SearchHeader() {
                     <SearchInput />
                 </div>
                 <div className="hidden md:flex w-fit min-w-[100px] justify-end">
-                    {/* Placeholder for future user menu or stats */}
+                    <a
+                        href="https://github.com/hynseok/cscs"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center justify-center rounded-md p-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                    >
+                        <Github className="h-5 w-5" />
+                        <span className="sr-only">GitHub</span>
+                    </a>
                 </div>
             </div>
         </header>
