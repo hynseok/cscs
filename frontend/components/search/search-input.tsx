@@ -51,6 +51,7 @@ export function SearchInput() {
         ref={inputRef}
         type="search"
         placeholder="Search for papers..."
+        aria-label="Search papers"
         className="pl-9 pr-14 h-12 text-lg shadow-sm transition-all focus-visible:ring-2 focus-visible:ring-primary/20"
         value={value}
         onChange={handleChange}
