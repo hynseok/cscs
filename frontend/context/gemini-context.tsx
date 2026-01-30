@@ -49,7 +49,7 @@ export function GeminiProvider({ children }: { children: ReactNode }) {
                 bibtex = generateFallbackBibtex(paper)
             }
 
-            const res = await fetch('http://localhost:8080/gemini', {
+            const res = await fetch('/api/gemini', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ bibtex }),
