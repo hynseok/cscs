@@ -12,6 +12,8 @@ use tower_http::cors::CorsLayer;
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 
+mod gemini;
+
 #[derive(Clone)]
 struct AppState {
     meili: Client,
@@ -58,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/search", get(search_papers))
+        .route("/gemini", axum::routing::post(gemini::gemini_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
