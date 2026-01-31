@@ -4,9 +4,27 @@ import React from 'react'
 import { useGemini } from '@/context/gemini-context'
 import { X, Sparkles, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+
+const ClickableStrong = ({ ...props }: any) => {
+    const router = useRouter()
+    return (
+        <strong
+            className="font-semibold text-foreground underline decoration-primary/30 underline-offset-2 cursor-pointer hover:bg-primary/10 hover:text-primary transition-colors"
+            onClick={() => {
+                if (props.children) {
+                    const term = String(props.children).replace(/[*_]/g, '')
+                    router.push(`/?q=${encodeURIComponent(term)}`)
+                }
+            }}
+            {...props}
+        />
+    )
+}
 
 export function GeminiPanel() {
     const { isOpen, closeGemini, isLoading, response, activePaper } = useGemini()
@@ -61,7 +79,7 @@ export function GeminiPanel() {
                                         p: ({ ...props }) => <p className="leading-7 mb-4 text-foreground/90" {...props} />,
                                         ul: ({ ...props }) => <ul className="list-disc pl-5 mb-4 space-y-2" {...props} />,
                                         li: ({ ...props }) => <li className="pl-1 leading-relaxed" {...props} />,
-                                        strong: ({ ...props }) => <strong className="font-semibold text-foreground underline decoration-primary/30 underline-offset-2" {...props} />,
+                                        strong: ClickableStrong,
                                     }}
                                 >
                                     {response}
