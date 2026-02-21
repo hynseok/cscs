@@ -2,12 +2,12 @@ use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use serde::Deserialize;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
 use std::collections::HashMap;
 use std::env;
-use urlencoding::encode;
-use serde::Deserialize;
+use urlencoding::{decode, encode};
 
 static VENUE_MAP: Lazy<HashMap<String, String>> = Lazy::new(|| {
     let mut m = HashMap::new();
@@ -103,9 +103,8 @@ struct Paper {
     venue: String,
     dblp_key: String,
     ee_links: Vec<String>,
-    citation_count: i32,
+    citation_count: Option<i32>,
 }
-
 
 #[derive(Deserialize, Debug)]
 struct OpenAlexResponse {
@@ -117,7 +116,6 @@ struct OpenAlexWork {
     doi: Option<String>,
     cited_by_count: Option<i32>,
 }
-
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -132,6 +130,8 @@ async fn main() -> Result<()> {
 }
 
 async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
+    const TARGET_ENTRY_TAG: &str = "inproceedings";
+
     let mut reader = Reader::from_file(path)?;
     reader.trim_text(true);
     let mut buf = Vec::new();
@@ -140,7 +140,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
     let mut year_str = String::new();
     let mut batch: Vec<Paper> = Vec::with_capacity(1000);
     let skip_tags = ["i", "sub", "sup", "tt", "ref", "span", "br"];
-    
+
     let http_client = reqwest::Client::new();
 
     println!("Start Parsing...");
@@ -150,7 +150,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
             Ok(Event::Start(ref e)) => {
                 let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 match tag_name.as_str() {
-                    "article" | "inproceedings" | "proceedings" | "book" | "incollection" => {
+                    TARGET_ENTRY_TAG => {
                         let mut key = String::new();
                         for attr in e.attributes().flatten() {
                             if attr.key.as_ref() == b"key" {
@@ -164,7 +164,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
                             venue: String::new(),
                             dblp_key: key,
                             ee_links: Vec::new(),
-                            citation_count: 0,
+                            citation_count: None,
                         });
                         current_tag = tag_name;
                     }
@@ -206,10 +206,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
             }
             Ok(Event::End(ref e)) => {
                 let tag_name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if matches!(
-                    tag_name.as_str(),
-                    "article" | "inproceedings" | "proceedings" | "book" | "incollection"
-                ) {
+                if tag_name.as_str() == TARGET_ENTRY_TAG {
                     if let Some(mut paper) = current_paper.take() {
                         paper.year = year_str.parse().unwrap_or(0);
                         year_str.clear();
@@ -242,7 +239,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
 }
 
 fn get_canonical(paper: &Paper) -> Option<String> {
-    if !paper.dblp_key.starts_with("conf/") && !paper.dblp_key.starts_with("journals/") {
+    if !paper.dblp_key.starts_with("conf/") {
         return None;
     }
     let parts: Vec<&str> = paper.dblp_key.split('/').collect();
@@ -262,11 +259,46 @@ fn get_canonical(paper: &Paper) -> Option<String> {
 }
 
 fn extract_doi(url: &str) -> Option<String> {
-    // Basic extraction: find "10." and take the rest
-    if let Some(idx) = url.find("10.") {
-        return Some(url[idx..].to_string());
+    let decoded = decode(url)
+        .map(|d| d.into_owned())
+        .unwrap_or_else(|_| url.to_string());
+    let lowered = decoded.trim().to_lowercase();
+
+    let mut candidate = lowered.as_str();
+    if let Some(pos) = candidate.find("doi.org/") {
+        candidate = &candidate[pos + "doi.org/".len()..];
     }
-    None
+    if let Some(stripped) = candidate.strip_prefix("urn:doi:") {
+        candidate = stripped;
+    }
+    if let Some(stripped) = candidate.strip_prefix("doi:") {
+        candidate = stripped;
+    }
+    if !candidate.starts_with("10.") {
+        if let Some(idx) = candidate.find("10.") {
+            candidate = &candidate[idx..];
+        } else {
+            return None;
+        }
+    }
+
+    let end = candidate
+        .find(|c: char| c.is_whitespace() || matches!(c, '?' | '#' | '"' | '\'' | '<' | '>'))
+        .unwrap_or(candidate.len());
+
+    let doi = candidate[..end]
+        .trim()
+        .trim_matches(|c: char| {
+            matches!(c, '.' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}')
+        })
+        .trim_start_matches('/')
+        .to_string();
+
+    if doi.starts_with("10.") {
+        Some(doi)
+    } else {
+        None
+    }
 }
 
 async fn fetch_citation_counts(client: &reqwest::Client, batch: &mut Vec<Paper>) -> Result<()> {
@@ -274,57 +306,86 @@ async fn fetch_citation_counts(client: &reqwest::Client, batch: &mut Vec<Paper>)
 
     // Chunk into 50 to avoid URL length issues
     for chunk in batch.chunks_mut(50) {
-        let mut doi_map: Vec<(usize, String)> = Vec::with_capacity(chunk.len());
-        
+        let mut doi_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
+
         for (i, p) in chunk.iter().enumerate() {
             for link in &p.ee_links {
-                if link.contains("doi.org") || link.contains("10.") {
-                     if let Some(doi) = extract_doi(link) {
-                        doi_map.push((i, doi));
-                        break; 
+                if let Some(doi) = extract_doi(link) {
+                    doi_to_indices.entry(doi).or_default().push(i);
+                    break;
+                }
+            }
+        }
+
+        if doi_to_indices.is_empty() {
+            continue;
+        }
+
+        let mut dois: Vec<String> = doi_to_indices.keys().cloned().collect();
+        dois.sort();
+
+        let filter = format!("doi:{}", dois.join("|"));
+        let per_page = dois.len().to_string();
+        let mut response: Option<reqwest::Response> = None;
+
+        for attempt in 0..3 {
+            let res = client
+                .get(base_url)
+                .query(&[
+                    ("filter", filter.as_str()),
+                    ("select", "doi,cited_by_count"),
+                    ("per_page", per_page.as_str()),
+                ])
+                .header("User-Agent", "ScholarSearch/1.0 (mailto:test@example.com)")
+                .send()
+                .await;
+
+            match res {
+                Ok(resp) if resp.status().is_success() => {
+                    response = Some(resp);
+                    break;
+                }
+                Ok(resp)
+                    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                        || resp.status().is_server_error() =>
+                {
+                    let delay_ms = 200 * (1_u64 << attempt);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(resp) => {
+                    eprintln!("OpenAlex request failed with status {}", resp.status());
+                    break;
+                }
+                Err(err) => {
+                    if attempt == 2 {
+                        eprintln!("OpenAlex request error: {}", err);
+                    } else {
+                        let delay_ms = 200 * (1_u64 << attempt);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                     }
                 }
             }
         }
 
-        if doi_map.is_empty() {
-            continue;
+        if let Some(resp) = response {
+            let oa_resp: OpenAlexResponse = resp
+                .json()
+                .await
+                .unwrap_or_else(|_| OpenAlexResponse { results: vec![] });
+
+            for work in oa_resp.results {
+                if let (Some(doi_raw), Some(count)) = (work.doi.as_deref(), work.cited_by_count) {
+                    if let Some(work_doi) = extract_doi(doi_raw) {
+                        if let Some(indices) = doi_to_indices.get(&work_doi) {
+                            for idx in indices {
+                                chunk[*idx].citation_count = Some(count);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        let dois: Vec<String> = doi_map.iter().map(|(_, doi)| doi.clone()).collect();
-        // filter=doi:A|B|C
-        let filter_val = dois.join("|");
-        let query_url = format!("{}?filter=doi:{}&select=doi,cited_by_count&per_page=50", base_url, filter_val);
-
-        // OpenAlex is generally open, email in User-Agent is polite.
-        let res = client.get(&query_url)
-            .header("User-Agent", "ScholarSearch/1.0 (mailto:test@example.com)") 
-            .send().await;
-
-        if let Ok(resp) = res {
-             if resp.status().is_success() {
-                  let oa_resp: OpenAlexResponse = resp.json().await.unwrap_or_else(|_| OpenAlexResponse { results: vec![] });
-                  
-                  for work in oa_resp.results {
-                      if let Some(work_doi) = work.doi {
-                          let work_doi_clean = extract_doi(&work_doi).unwrap_or_default();
-                          if work_doi_clean.is_empty() { continue; }
-
-                          for (idx, original_doi) in &doi_map {
-                              // Simple string match might be enough if format is standard
-                              if *original_doi == work_doi_clean {
-                                  if let Some(count) = work.cited_by_count {
-                                      chunk[*idx].citation_count = count;
-                                  }
-                              }
-                          }
-                      }
-                  }
-             } else {
-                 eprintln!("OpenAlex API Error: {}", resp.status());
-             }
-        }
-        
         // Polite delay
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
@@ -369,7 +430,22 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
         };
 
         let v_id: i32 = sqlx::query_scalar("INSERT INTO venues (raw_name) VALUES ($1) ON CONFLICT (raw_name) DO UPDATE SET raw_name = EXCLUDED.raw_name RETURNING id").bind(&paper.venue).fetch_one(&mut *tx).await?;
-        let p_id: i32 = sqlx::query_scalar("INSERT INTO papers (venue_id, title, year, ee_link, dblp_key, citation_count) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (dblp_key) DO UPDATE SET title = EXCLUDED.title, citation_count = EXCLUDED.citation_count RETURNING id").bind(v_id).bind(&paper.title).bind(paper.year).bind(&ee_link).bind(&paper.dblp_key).bind(paper.citation_count).fetch_one(&mut *tx).await?;
+        let p_id: i32 = sqlx::query_scalar(
+            "INSERT INTO papers (venue_id, title, year, ee_link, dblp_key, citation_count) \
+             VALUES ($1, $2, $3, $4, $5, COALESCE($6, 0)) \
+             ON CONFLICT (dblp_key) DO UPDATE SET \
+             title = EXCLUDED.title, \
+             citation_count = COALESCE(EXCLUDED.citation_count, papers.citation_count) \
+             RETURNING id",
+        )
+        .bind(v_id)
+        .bind(&paper.title)
+        .bind(paper.year)
+        .bind(&ee_link)
+        .bind(&paper.dblp_key)
+        .bind(paper.citation_count)
+        .fetch_one(&mut *tx)
+        .await?;
         for (idx, name) in paper.authors.iter().enumerate() {
             let a_id: i32 = sqlx::query_scalar("INSERT INTO authors (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id").bind(name).fetch_one(&mut *tx).await?;
             sqlx::query("INSERT INTO paper_authors (paper_id, author_id, author_order) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING").bind(p_id).bind(a_id).bind(idx as i32).execute(&mut *tx).await?;
