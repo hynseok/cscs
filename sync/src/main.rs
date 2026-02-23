@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
         let rows = sqlx::query!(
             r#"
             SELECT p.id, p.title, p.year, p.ee_link, p.dblp_key, p.citation_count, v.raw_name as venue, 
-                   ARRAY_AGG(a.name) as "authors!"
+                   ARRAY_AGG(a.name ORDER BY pa.author_order) as "authors!"
             FROM papers p
             JOIN venues v ON p.venue_id = v.id
             JOIN paper_authors pa ON p.id = pa.paper_id

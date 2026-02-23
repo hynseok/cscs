@@ -27,10 +27,12 @@ CREATE TABLE papers (
 CREATE TABLE paper_authors (
     paper_id INT REFERENCES papers(id) ON DELETE CASCADE,
     author_id INT REFERENCES authors(id) ON DELETE CASCADE,
-    author_order INT,
-    PRIMARY KEY (paper_id, author_id)
+    author_order INT NOT NULL CHECK (author_order >= 0),
+    PRIMARY KEY (paper_id, author_order),
+    UNIQUE (paper_id, author_id)
 );
 
 CREATE INDEX idx_papers_venue ON papers(venue_id);
 CREATE INDEX idx_papers_year ON papers(year);
 CREATE INDEX idx_authors_name ON authors(name);
+CREATE INDEX idx_paper_authors_author_id ON paper_authors(author_id);
