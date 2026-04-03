@@ -214,7 +214,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
                             paper.venue = canonical;
                             batch.push(paper);
                             if batch.len() >= 1000 {
-                                fetch_citation_counts(&http_client, &mut batch).await?;
+                                fetch_citation_counts(pool, &http_client, &mut batch).await?;
                                 insert_batch(pool, &mut batch).await?;
                                 print!(".");
                                 std::io::Write::flush(&mut std::io::stdout())?;
@@ -232,7 +232,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
         buf.clear();
     }
     if !batch.is_empty() {
-        fetch_citation_counts(&http_client, &mut batch).await?;
+        fetch_citation_counts(pool, &http_client, &mut batch).await?;
         insert_batch(pool, &mut batch).await?;
     }
     Ok(())
@@ -301,7 +301,18 @@ fn extract_doi(url: &str) -> Option<String> {
     }
 }
 
-async fn fetch_citation_counts(client: &reqwest::Client, batch: &mut Vec<Paper>) -> Result<()> {
+async fn fetch_citation_counts(pool: &Pool<Postgres>, client: &reqwest::Client, batch: &mut Vec<Paper>) -> Result<()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+
+    let dblp_keys: Vec<String> = batch.iter().map(|p| p.dblp_key.clone()).collect();
+    let existing_rows: Vec<(String,)> = sqlx::query_as("SELECT dblp_key FROM papers WHERE dblp_key = ANY($1)")
+        .bind(&dblp_keys)
+        .fetch_all(pool).await?;
+    
+    let existing_keys: std::collections::HashSet<String> = existing_rows.into_iter().map(|r| r.0).collect();
+
     let base_url = "https://api.openalex.org/works";
 
     // Chunk into 50 to avoid URL length issues
@@ -309,6 +320,9 @@ async fn fetch_citation_counts(client: &reqwest::Client, batch: &mut Vec<Paper>)
         let mut doi_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
 
         for (i, p) in chunk.iter().enumerate() {
+            if existing_keys.contains(&p.dblp_key) {
+                continue;
+            }
             for link in &p.ee_links {
                 if let Some(doi) = extract_doi(link) {
                     doi_to_indices.entry(doi).or_default().push(i);

@@ -60,7 +60,7 @@ Follow these steps to set up the project locally.
 
 4.  **Populate Data**
     
-    1.  Download the latest DBLP dump (`dblp.xml` and `dblp.dtd`) from [dblp.org](https://dblp.org/xml/release/) and place them in the `parser` directory.
+    1.  Download the latest DBLP dump (`dblp.xml` and `dblp.dtd`) from [dblp.org](https://dblp.org/xml/) and place them in the `parser` directory.
 
     2.  Run the parser to import data into PostgreSQL:
         ```bash
