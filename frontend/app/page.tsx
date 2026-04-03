@@ -4,6 +4,7 @@ import { ResultList } from '@/components/search/result-list'
 import { SearchHeader } from '@/components/search/search-header'
 import { MobileFilter } from '@/components/search/mobile-filter'
 import { ScrollToTop } from '@/components/search/scroll-to-top'
+import { SearchTracker } from '@/components/search/search-tracker'
 import { Suspense } from 'react'
 import { searchPapers } from '@/lib/search-client'
 import { HydrationBoundary, QueryClient, dehydrate } from '@tanstack/react-query'
@@ -60,6 +61,7 @@ export default async function SearchPage(props: {
         <ScrollToTop />
         <div className="flex min-h-screen flex-col bg-background">
           <SearchHeader />
+          <SearchTracker q={q} />
           <main className="flex flex-1 flex-col md:flex-row gap-6 p-4 md:gap-8 md:p-8">
             <aside className="hidden w-64 flex-col gap-4 md:flex">
               <FilterSidebar />

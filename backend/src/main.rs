@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Query, State},
-    routing::get,
+    routing::{get, post},
 };
 use meilisearch_sdk::client::Client;
 use meilisearch_sdk::search::Selectors;
@@ -11,6 +11,7 @@ use tower_http::cors::CorsLayer;
 
 use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
+use sqlx::{postgres::PgPoolOptions, PgPool};
 
 mod gemini;
 
@@ -18,6 +19,7 @@ mod gemini;
 struct AppState {
     meili: Client,
     redis: redis::Client,
+    db: PgPool,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,14 +55,23 @@ async fn main() -> anyhow::Result<()> {
     let redis_url = std::env::var("REDIS_URL").unwrap_or("redis://127.0.0.1:6379".into());
     let redis_client = redis::Client::open(redis_url)?;
 
+    let db_url = std::env::var("DATABASE_URL").unwrap_or("postgres://user:password@localhost:5432/dblp_db".into());
+    let db_pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&db_url)
+        .await?;
+
     let state = Arc::new(AppState {
         meili: Client::new(meili_url, Some(meili_key))?,
         redis: redis_client,
+        db: db_pool,
     });
 
     let app = Router::new()
         .route("/search", get(search_papers))
-        .route("/gemini", axum::routing::post(gemini::gemini_handler))
+        .route("/gemini", post(gemini::gemini_handler))
+        .route("/seo/search", post(post_seo_search))
+        .route("/seo/sitemap", get(get_seo_sitemap))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -265,4 +276,39 @@ async fn search_papers(
     }
 
     Json(response_json)
+}
+
+#[derive(Deserialize)]
+struct SeoSearchRequest {
+    q: String,
+}
+
+async fn post_seo_search(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<SeoSearchRequest>,
+) -> Result<Json<()>, (axum::http::StatusCode, String)> {
+    let q = payload.q.trim();
+    if q.is_empty() {
+        return Ok(Json(()));
+    }
+
+    sqlx::query("INSERT INTO search_queries (query) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(q)
+        .execute(&state.db)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(()))
+}
+
+async fn get_seo_sitemap(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<String>>, (axum::http::StatusCode, String)> {
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT query FROM search_queries")
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let queries = rows.into_iter().map(|r| r.0).collect();
+    Ok(Json(queries))
 }

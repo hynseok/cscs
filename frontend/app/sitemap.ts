@@ -1,15 +1,34 @@
 import { MetadataRoute } from 'next'
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
 
-    return [
+    const routes: MetadataRoute.Sitemap = [
         {
             url: baseUrl,
             lastModified: new Date(),
             changeFrequency: 'daily',
             priority: 1,
         },
-        // Add more dynamic routes here if we create pages for each paper
     ]
+
+    try {
+        const res = await fetch(`${backendUrl}/seo/sitemap`, { next: { revalidate: 3600 } })
+        if (res.ok) {
+            const queries: string[] = await res.json()
+            for (const query of queries) {
+                routes.push({
+                    url: `${baseUrl}/?q=${encodeURIComponent(query)}`,
+                    lastModified: new Date(),
+                    changeFrequency: 'weekly',
+                    priority: 0.8,
+                })
+            }
+        }
+    } catch (e) {
+        console.error('Failed to fetch SEO sitemap queries', e)
+    }
+
+    return routes
 }
