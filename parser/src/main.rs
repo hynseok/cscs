@@ -393,8 +393,55 @@ async fn fetch_citation_counts(client: &reqwest::Client, batch: &mut Vec<Paper>)
 }
 
 async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+
     let mut tx = pool.begin().await?;
+
+    // 1. Bulk insert venues
+    let mut venues_set = std::collections::HashSet::new();
+    for p in batch.iter() {
+        venues_set.insert(p.venue.clone());
+    }
+    let unique_venues: Vec<String> = venues_set.into_iter().collect();
+
+    if !unique_venues.is_empty() {
+        sqlx::query("INSERT INTO venues (raw_name) SELECT * FROM UNNEST($1::text[]) ON CONFLICT (raw_name) DO NOTHING")
+            .bind(&unique_venues)
+            .execute(&mut *tx).await?;
+    }
+
+    let venue_rows: Vec<(i32, String)> = sqlx::query_as("SELECT id, raw_name FROM venues WHERE raw_name = ANY($1)")
+        .bind(&unique_venues)
+        .fetch_all(&mut *tx).await?;
+    
+    let mut venue_map: HashMap<String, i32> = HashMap::new();
+    for r in venue_rows {
+        venue_map.insert(r.1, r.0);
+    }
+
+    // 2. Prepare papers & authors data
+    let capacity = batch.len();
+    let mut titles = Vec::with_capacity(capacity);
+    let mut years = Vec::with_capacity(capacity);
+    let mut ee_links = Vec::with_capacity(capacity);
+    let mut dblp_keys = Vec::with_capacity(capacity);
+    let mut cit_counts = Vec::with_capacity(capacity);
+    let mut venue_ids = Vec::with_capacity(capacity);
+
+    let mut pa_dblp_keys = Vec::new();
+    let mut pa_author_orders = Vec::new();
+    let mut pa_author_names = Vec::new();
+
+    let mut unique_author_names_set = std::collections::HashSet::new();
+    let mut dblp_key_seen = std::collections::HashSet::new();
+
     for paper in batch.drain(..) {
+        if !dblp_key_seen.insert(paper.dblp_key.clone()) {
+            continue;
+        }
+
         let ee_link = if paper.ee_links.is_empty() {
             format!(
                 "https://scholar.google.com/scholar?q={}",
@@ -429,28 +476,96 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
             selected.unwrap_or_else(|| paper.ee_links[0].clone())
         };
 
-        let v_id: i32 = sqlx::query_scalar("INSERT INTO venues (raw_name) VALUES ($1) ON CONFLICT (raw_name) DO UPDATE SET raw_name = EXCLUDED.raw_name RETURNING id").bind(&paper.venue).fetch_one(&mut *tx).await?;
-        let p_id: i32 = sqlx::query_scalar(
-            "INSERT INTO papers (venue_id, title, year, ee_link, dblp_key, citation_count) \
-             VALUES ($1, $2, $3, $4, $5, COALESCE($6, 0)) \
-             ON CONFLICT (dblp_key) DO UPDATE SET \
-             title = EXCLUDED.title, \
-             citation_count = COALESCE(EXCLUDED.citation_count, papers.citation_count) \
-             RETURNING id",
-        )
-        .bind(v_id)
-        .bind(&paper.title)
-        .bind(paper.year)
-        .bind(&ee_link)
-        .bind(&paper.dblp_key)
-        .bind(paper.citation_count)
-        .fetch_one(&mut *tx)
-        .await?;
-        for (idx, name) in paper.authors.iter().enumerate() {
-            let a_id: i32 = sqlx::query_scalar("INSERT INTO authors (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id").bind(name).fetch_one(&mut *tx).await?;
-            sqlx::query("INSERT INTO paper_authors (paper_id, author_id, author_order) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING").bind(p_id).bind(a_id).bind(idx as i32).execute(&mut *tx).await?;
+        let v_id = venue_map.get(&paper.venue).copied().unwrap_or(0);
+        let dblp_key = paper.dblp_key.clone();
+
+        titles.push(paper.title);
+        years.push(paper.year);
+        ee_links.push(ee_link);
+        dblp_keys.push(dblp_key.clone());
+        cit_counts.push(paper.citation_count.unwrap_or(0));
+        venue_ids.push(v_id);
+
+        for (idx, name) in paper.authors.into_iter().enumerate() {
+            unique_author_names_set.insert(name.clone());
+            pa_dblp_keys.push(dblp_key.clone());
+            pa_author_orders.push(idx as i32);
+            pa_author_names.push(name);
         }
     }
+
+    // 3. Bulk insert papers
+    if !dblp_keys.is_empty() {
+        sqlx::query(
+            "INSERT INTO papers (venue_id, title, year, ee_link, dblp_key, citation_count) \
+             SELECT * FROM UNNEST($1::int[], $2::text[], $3::int[], $4::text[], $5::text[], $6::int[]) \
+             ON CONFLICT (dblp_key) DO UPDATE SET \
+             title = EXCLUDED.title, \
+             citation_count = COALESCE(EXCLUDED.citation_count, papers.citation_count)"
+        )
+        .bind(&venue_ids)
+        .bind(&titles)
+        .bind(&years)
+        .bind(&ee_links)
+        .bind(&dblp_keys)
+        .bind(&cit_counts)
+        .execute(&mut *tx).await?;
+    }
+
+    let paper_rows: Vec<(i32, String)> = sqlx::query_as("SELECT id, dblp_key FROM papers WHERE dblp_key = ANY($1)")
+        .bind(&dblp_keys)
+        .fetch_all(&mut *tx).await?;
+        
+    let mut paper_map: HashMap<String, i32> = HashMap::new();
+    for r in paper_rows {
+        paper_map.insert(r.1, r.0);
+    }
+
+    // 4. Bulk insert authors
+    let unique_authors: Vec<String> = unique_author_names_set.into_iter().collect();
+    if !unique_authors.is_empty() {
+        sqlx::query("INSERT INTO authors (name) SELECT * FROM UNNEST($1::text[]) ON CONFLICT (name) DO NOTHING")
+            .bind(&unique_authors)
+            .execute(&mut *tx).await?;
+    }
+
+    let author_rows: Vec<(i32, String)> = sqlx::query_as("SELECT id, name FROM authors WHERE name = ANY($1)")
+        .bind(&unique_authors)
+        .fetch_all(&mut *tx).await?;
+        
+    let mut author_map: HashMap<String, i32> = HashMap::new();
+    for r in author_rows {
+        author_map.insert(r.1, r.0);
+    }
+
+    // 5. Bulk insert paper_authors
+    let mut final_pa_paper_ids = Vec::with_capacity(pa_dblp_keys.len());
+    let mut final_pa_author_ids = Vec::with_capacity(pa_dblp_keys.len());
+    let mut final_pa_author_orders = Vec::with_capacity(pa_dblp_keys.len());
+    let mut pa_set = std::collections::HashSet::new();
+
+    for i in 0..pa_dblp_keys.len() {
+        let p_id = paper_map.get(&pa_dblp_keys[i]);
+        let a_id = author_map.get(&pa_author_names[i]);
+        if let (Some(p), Some(a)) = (p_id, a_id) {
+            if pa_set.insert((*p, *a)) {
+                final_pa_paper_ids.push(*p);
+                final_pa_author_ids.push(*a);
+                final_pa_author_orders.push(pa_author_orders[i]);
+            }
+        }
+    }
+
+    if !final_pa_paper_ids.is_empty() {
+        sqlx::query("INSERT INTO paper_authors (paper_id, author_id, author_order) \
+                     SELECT * FROM UNNEST($1::int[], $2::int[], $3::int[]) \
+                     ON CONFLICT DO NOTHING")
+            .bind(&final_pa_paper_ids)
+            .bind(&final_pa_author_ids)
+            .bind(&final_pa_author_orders)
+            .execute(&mut *tx).await?;
+    }
+
     tx.commit().await?;
     Ok(())
 }
