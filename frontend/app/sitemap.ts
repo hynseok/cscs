@@ -1,5 +1,7 @@
 import { MetadataRoute } from 'next'
 
+export const dynamic = 'force-dynamic'
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
@@ -14,7 +16,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ]
 
     try {
-        const res = await fetch(`${backendUrl}/seo/sitemap`, { next: { revalidate: 3600 } })
+        const res = await fetch(`${backendUrl}/seo/sitemap`, { cache: 'no-store' })
         if (res.ok) {
             const queries: string[] = await res.json()
             for (const query of queries) {
