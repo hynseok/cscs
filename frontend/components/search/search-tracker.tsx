@@ -7,9 +7,8 @@ export function SearchTracker({ q }: { q: string }) {
     if (!q || q.trim() === '') return;
 
     const timer = setTimeout(() => {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080';
-      
-      fetch(`${backendUrl}/seo/search`, {
+      // Call the internal Next.js API route to proxy the request securely
+      fetch(`/api/seo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ q }),
