@@ -31,4 +31,8 @@ cd ..
 echo "Cleaning up downloaded files..."
 rm -f parser/dblp.xml.gz parser/dblp.xml parser/dblp.dtd
 
+# 6. Flush Redis Cache
+echo "Flushing Redis cache..."
+docker exec cscs-cache redis-cli FLUSHALL || echo "Warning: Could not flush Redis cache."
+
 echo "Data update completed successfully!"
