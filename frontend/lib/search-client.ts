@@ -7,6 +7,7 @@ export interface Paper {
     ee_link: string
     dblp_key: string
     citation_count?: number
+    abstract_text?: string
     _formatted?: {
         title: string
         venue: string
@@ -14,6 +15,7 @@ export interface Paper {
         year: string | number
         dblp_key?: string
         citation_count?: number
+        abstract_text?: string
     }
 }
 

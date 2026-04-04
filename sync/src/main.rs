@@ -13,6 +13,7 @@ struct PaperDoc {
     ee_link: Option<String>,
     dblp_key: String,
     citation_count: i32,
+    abstract_text: Option<String>,
 }
 
 #[tokio::main]
@@ -34,13 +35,13 @@ async fn main() -> anyhow::Result<()> {
     loop {
         let rows = sqlx::query!(
             r#"
-            SELECT p.id, p.title, p.year, p.ee_link, p.dblp_key, p.citation_count, v.raw_name as venue, 
+            SELECT p.id, p.title, p.year, p.ee_link, p.dblp_key, p.citation_count, p.abstract as abstract_text, v.raw_name as venue, 
                    ARRAY_AGG(a.name ORDER BY pa.author_order) as "authors!"
             FROM papers p
             JOIN venues v ON p.venue_id = v.id
             JOIN paper_authors pa ON p.id = pa.paper_id
             JOIN authors a ON pa.author_id = a.id
-            GROUP BY p.id, v.raw_name, p.ee_link, p.dblp_key, p.citation_count
+            GROUP BY p.id, v.raw_name, p.ee_link, p.dblp_key, p.citation_count, p.abstract
             ORDER BY p.id ASC
             LIMIT $1 OFFSET $2
             "#,
@@ -65,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
                 ee_link: r.ee_link,
                 dblp_key: r.dblp_key,
                 citation_count: r.citation_count.unwrap_or(0),
+                abstract_text: r.abstract_text,
             })
             .collect();
 
@@ -88,9 +90,18 @@ async fn setup_meili_settings(client: &Client, index: &Index) -> anyhow::Result<
     task.wait_for_completion(client, None, None).await?;
 
     let task = index
-        .set_searchable_attributes(["title", "authors", "venue"])
+        .set_searchable_attributes(["title", "authors", "venue", "abstract_text"])
         .await?;
     task.wait_for_completion(client, None, None).await?;
+
+    // Increase maxTotalHits from the default 1000 to 5,000,000 via HTTP
+    let http_client = reqwest::Client::new();
+    let _ = http_client
+        .patch("http://localhost:7700/indexes/papers/settings/pagination")
+        .header("Authorization", "Bearer 1234")
+        .json(&serde_json::json!({ "maxTotalHits": 5000000 }))
+        .send()
+        .await;
 
     println!("Meilisearch settings applied.");
     Ok(())

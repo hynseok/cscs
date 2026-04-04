@@ -201,7 +201,9 @@ async fn search_papers(
     }
     
     // Enable Highlighting
-    main_search.with_attributes_to_highlight(Selectors::Some(&["title", "venue", "authors"]));
+    main_search.with_attributes_to_highlight(Selectors::Some(&["title", "venue", "authors", "abstract_text"]));
+    main_search.with_attributes_to_crop(Selectors::Some(&[("abstract_text", Some(40))]));
+    main_search.with_crop_marker("...");
     
     let mut requested_facets = Vec::new();
     if let Some(ref facets) = params.facets {

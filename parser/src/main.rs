@@ -106,6 +106,7 @@ struct Paper {
     dblp_key: String,
     ee_links: Vec<String>,
     citation_count: Option<i32>,
+    abstract_text: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -116,7 +117,25 @@ struct OpenAlexResponse {
 #[derive(Deserialize, Debug)]
 struct OpenAlexWork {
     doi: Option<String>,
+    title: Option<String>,
     cited_by_count: Option<i32>,
+    abstract_inverted_index: Option<HashMap<String, Vec<usize>>>,
+}
+
+fn reconstruct_abstract(index: &HashMap<String, Vec<usize>>) -> String {
+    let max_idx = index.values().flat_map(|v| v.iter()).max().copied().unwrap_or(0);
+    if index.is_empty() || max_idx > 20000 {
+        return String::new();
+    }
+    let mut words = vec!["".to_string(); max_idx + 1];
+    for (word, positions) in index {
+        for &pos in positions {
+            if pos <= max_idx {
+                words[pos] = word.clone();
+            }
+        }
+    }
+    words.into_iter().filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 #[tokio::main]
@@ -183,6 +202,7 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
                             dblp_key: key,
                             ee_links: Vec::new(),
                             citation_count: None,
+                            abstract_text: None,
                         });
                         current_tag = tag_name;
                     }
@@ -328,7 +348,7 @@ async fn fetch_citation_counts(pool: &Pool<Postgres>, client: &reqwest::Client, 
     }
 
     let dblp_keys: Vec<String> = batch.iter().map(|p| p.dblp_key.clone()).collect();
-    let existing_rows: Vec<(String,)> = sqlx::query_as("SELECT dblp_key FROM papers WHERE dblp_key = ANY($1)")
+    let existing_rows: Vec<(String,)> = sqlx::query_as("SELECT dblp_key FROM papers WHERE dblp_key = ANY($1) AND abstract IS NOT NULL")
         .bind(&dblp_keys)
         .fetch_all(pool).await?;
     
@@ -375,7 +395,7 @@ async fn fetch_citation_counts(pool: &Pool<Postgres>, client: &reqwest::Client, 
                     .get(base_url)
                     .query(&[
                         ("filter", filter.as_str()),
-                        ("select", "doi,cited_by_count"),
+                        ("select", "doi,cited_by_count,abstract_inverted_index"),
                         ("per_page", per_page.as_str()),
                     ])
                     .header("User-Agent", "ScholarSearch/1.0 (mailto:test@example.com)")
@@ -428,11 +448,15 @@ async fn fetch_citation_counts(pool: &Pool<Postgres>, client: &reqwest::Client, 
 
     while let Some((doi_to_abs_indices, results)) = stream.next().await {
         for work in results {
+            let reconstructed = work.abstract_inverted_index.as_ref().map(reconstruct_abstract);
             if let (Some(doi_raw), Some(count)) = (work.doi.as_deref(), work.cited_by_count) {
                 if let Some(work_doi) = extract_doi(doi_raw) {
                     if let Some(indices) = doi_to_abs_indices.get(&work_doi) {
-                        for idx in indices {
-                            batch[*idx].citation_count = Some(count);
+                        for &idx in indices {
+                            batch[idx].citation_count = Some(count);
+                            if let Some(ref abs) = reconstructed {
+                                batch[idx].abstract_text = Some(abs.clone());
+                            }
                         }
                     }
                 }
@@ -479,6 +503,7 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
     let mut ee_links = Vec::with_capacity(capacity);
     let mut dblp_keys = Vec::with_capacity(capacity);
     let mut cit_counts = Vec::with_capacity(capacity);
+    let mut abstracts = Vec::with_capacity(capacity);
     let mut venue_ids = Vec::with_capacity(capacity);
 
     let mut pa_dblp_keys = Vec::new();
@@ -535,6 +560,7 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
         ee_links.push(ee_link);
         dblp_keys.push(dblp_key.clone());
         cit_counts.push(paper.citation_count.unwrap_or(0));
+        abstracts.push(paper.abstract_text.clone());
         venue_ids.push(v_id);
 
         for (idx, name) in paper.authors.into_iter().enumerate() {
@@ -545,14 +571,14 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
         }
     }
 
-    // 3. Bulk insert papers
     if !dblp_keys.is_empty() {
         sqlx::query(
-            "INSERT INTO papers (venue_id, title, year, ee_link, dblp_key, citation_count) \
-             SELECT * FROM UNNEST($1::int[], $2::text[], $3::int[], $4::text[], $5::text[], $6::int[]) \
+            "INSERT INTO papers (venue_id, title, year, ee_link, dblp_key, citation_count, abstract) \
+             SELECT * FROM UNNEST($1::int[], $2::text[], $3::int[], $4::text[], $5::text[], $6::int[], $7::text[]) \
              ON CONFLICT (dblp_key) DO UPDATE SET \
              title = EXCLUDED.title, \
-             citation_count = COALESCE(EXCLUDED.citation_count, papers.citation_count)"
+             citation_count = COALESCE(EXCLUDED.citation_count, papers.citation_count), \
+             abstract = COALESCE(EXCLUDED.abstract, papers.abstract)"
         )
         .bind(&venue_ids)
         .bind(&titles)
@@ -560,6 +586,7 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
         .bind(&ee_links)
         .bind(&dblp_keys)
         .bind(&cit_counts)
+        .bind(&abstracts)
         .execute(&mut *tx).await?;
     }
 

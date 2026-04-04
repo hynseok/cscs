@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS papers (
     year INT,
     ee_link TEXT,
     dblp_key TEXT UNIQUE NOT NULL,
-    citation_count INT DEFAULT 0
+    citation_count INT DEFAULT 0,
+    abstract TEXT
 );
 
 CREATE TABLE IF NOT EXISTS paper_authors (

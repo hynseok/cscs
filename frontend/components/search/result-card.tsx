@@ -11,8 +11,9 @@ import { Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 export function ResultCard({ paper }: { paper: Paper }) {
-    const [, setQ] = useQueryState('q')
+    const [q, setQ] = useQueryState('q')
     const { openGemini } = useGemini()
+    const isSearchActive = q && q.trim().length > 0;
 
     return (
         <article>
@@ -46,6 +47,15 @@ export function ResultCard({ paper }: { paper: Paper }) {
                             )
                         })}
                     </div>
+                    {/* Abstract Details highlighted by Meilisearch */}
+                    {isSearchActive && paper._formatted?.abstract_text?.includes('<em>') && (
+                        <div
+                            className="text-sm text-foreground/80 mt-3 mb-4 border-l-[3px] border-primary/40 pl-4 py-1 italic leading-relaxed line-clamp-3 [&>em]:bg-primary/20 [&>em]:not-italic [&>em]:text-foreground [&>em]:font-semibold [&>em]:rounded-sm [&>em]:px-1 [&>em]:py-0.5"
+                            dangerouslySetInnerHTML={{
+                                __html: paper._formatted?.abstract_text || paper.abstract_text!
+                            }}
+                        />
+                    )}
                     <div className="flex items-center gap-2 text-xs">
                         <Badge variant="secondary" className="font-normal">
                             <span dangerouslySetInnerHTML={{ __html: paper._formatted?.venue || paper.venue }} />
