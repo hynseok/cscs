@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 export async function POST(req: Request) {
     try {
         const body = await req.json()
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
+        const backendUrl = process.env.BACKEND_URL || 'http://localhost:8080'
         
         // Proxy the request from Next.js Server to the internal Rust Backend
         await fetch(`${backendUrl}/seo/search`, {

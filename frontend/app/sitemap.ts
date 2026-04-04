@@ -5,7 +5,7 @@ export const revalidate = 0
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
+    const backendUrl = process.env.BACKEND_URL || 'http://localhost:8080'
 
     const routes: MetadataRoute.Sitemap = [
         {
