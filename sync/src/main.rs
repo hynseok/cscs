@@ -94,15 +94,6 @@ async fn setup_meili_settings(client: &Client, index: &Index) -> anyhow::Result<
         .await?;
     task.wait_for_completion(client, None, None).await?;
 
-    // Increase maxTotalHits from the default 1000 to 5,000,000 via HTTP
-    let http_client = reqwest::Client::new();
-    let _ = http_client
-        .patch("http://localhost:7700/indexes/papers/settings/pagination")
-        .header("Authorization", "Bearer 1234")
-        .json(&serde_json::json!({ "maxTotalHits": 5000000 }))
-        .send()
-        .await;
-
     println!("Meilisearch settings applied.");
     Ok(())
 }
