@@ -61,7 +61,7 @@ export default async function SearchPage(props: {
         <ScrollToTop />
         <div className="flex min-h-screen flex-col bg-background">
           <SearchHeader />
-          <SearchTracker q={q} />
+          <SearchTracker />
           <main className="flex flex-1 flex-col md:flex-row gap-6 p-4 md:gap-8 md:p-8">
             <aside className="hidden w-64 flex-col gap-4 md:flex">
               <FilterSidebar />

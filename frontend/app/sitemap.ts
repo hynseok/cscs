@@ -21,8 +21,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         if (res.ok) {
             const queries: string[] = await res.json()
             for (const query of queries) {
+                // If it contains '=', it's a full query string (e.g. venue=AAAI&q=Spiking)
+                // Otherwise it's the old single-keyword format
+                const queryString = query.includes('=') ? query : `q=${encodeURIComponent(query)}`
+                
                 routes.push({
-                    url: `${baseUrl}/?q=${encodeURIComponent(query)}`,
+                    url: `${baseUrl}/?${queryString}`,
                     lastModified: new Date(),
                     changeFrequency: 'weekly',
                     priority: 0.8,
