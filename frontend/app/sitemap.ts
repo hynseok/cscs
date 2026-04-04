@@ -23,7 +23,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
             for (const query of queries) {
                 // If it contains '=', it's a full query string (e.g. venue=AAAI&q=Spiking)
                 // Otherwise it's the old single-keyword format
-                const queryString = query.includes('=') ? query : `q=${encodeURIComponent(query)}`
+                let queryString = query.includes('=') ? query : `q=${encodeURIComponent(query)}`
+                
+                // XML strictly requires escaping ampersands (& -> &amp;)
+                queryString = queryString.replace(/&/g, '&amp;')
                 
                 routes.push({
                     url: `${baseUrl}/?${queryString}`,
