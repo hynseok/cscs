@@ -502,7 +502,7 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
     let mut years = Vec::with_capacity(capacity);
     let mut ee_links = Vec::with_capacity(capacity);
     let mut dblp_keys = Vec::with_capacity(capacity);
-    let mut cit_counts = Vec::with_capacity(capacity);
+    let mut cit_counts: Vec<Option<i32>> = Vec::with_capacity(capacity);
     let mut abstracts = Vec::with_capacity(capacity);
     let mut venue_ids = Vec::with_capacity(capacity);
 
@@ -559,7 +559,7 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
         years.push(paper.year);
         ee_links.push(ee_link);
         dblp_keys.push(dblp_key.clone());
-        cit_counts.push(paper.citation_count.unwrap_or(0));
+        cit_counts.push(paper.citation_count);
         abstracts.push(paper.abstract_text.clone());
         venue_ids.push(v_id);
 
@@ -577,7 +577,10 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
              SELECT * FROM UNNEST($1::int[], $2::text[], $3::int[], $4::text[], $5::text[], $6::int[], $7::text[]) \
              ON CONFLICT (dblp_key) DO UPDATE SET \
              title = EXCLUDED.title, \
-             citation_count = COALESCE(EXCLUDED.citation_count, papers.citation_count), \
+             citation_count = CASE \
+                 WHEN EXCLUDED.citation_count > 0 THEN EXCLUDED.citation_count \
+                 ELSE COALESCE(papers.citation_count, EXCLUDED.citation_count) \
+             END, \
              abstract = COALESCE(EXCLUDED.abstract, papers.abstract)"
         )
         .bind(&venue_ids)
