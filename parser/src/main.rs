@@ -388,14 +388,16 @@ async fn fetch_citation_counts(pool: &Pool<Postgres>, client: &reqwest::Client, 
 
             let filter = format!("doi:{}", dois.join("|"));
             let per_page = dois.len().to_string();
-            let mut response: Option<reqwest::Response> = None;
 
+            // 1. Fetch Citation Counts
+            let mut cit_results = Vec::new();
+            let mut response = None;
             for attempt in 0..3 {
                 let res = client
                     .get(base_url)
                     .query(&[
                         ("filter", filter.as_str()),
-                        ("select", "doi,cited_by_count,abstract_inverted_index"),
+                        ("select", "doi,cited_by_count"),
                         ("per_page", per_page.as_str()),
                     ])
                     .header("User-Agent", "ScholarSearch/1.0 (mailto:test@example.com)")
@@ -403,60 +405,88 @@ async fn fetch_citation_counts(pool: &Pool<Postgres>, client: &reqwest::Client, 
                     .await;
 
                 match res {
-                    Ok(resp) if resp.status().is_success() => {
-                        response = Some(resp);
-                        break;
+                    Ok(resp) if resp.status().is_success() => { response = Some(resp); break; }
+                    Ok(resp) if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS || resp.status().is_server_error() => {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(200 * (1_u64 << attempt))).await;
                     }
-                    Ok(resp)
-                        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-                            || resp.status().is_server_error() =>
-                    {
-                        let delay_ms = 200 * (1_u64 << attempt);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                    }
-                    Ok(resp) => {
-                        eprintln!("OpenAlex request failed with status {}", resp.status());
-                        break;
-                    }
+                    Ok(resp) => { eprintln!("OpenAlex request failed for cit: {}", resp.status()); break; }
                     Err(err) => {
-                        if attempt == 2 {
-                            eprintln!("OpenAlex request error: {}", err);
-                        } else {
-                            let delay_ms = 200 * (1_u64 << attempt);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                        }
+                        if attempt == 2 { eprintln!("OpenAlex request error for cit: {}", err); }
+                        else { tokio::time::sleep(tokio::time::Duration::from_millis(200 * (1_u64 << attempt))).await; }
                     }
                 }
             }
-
-            let mut results = Vec::new();
             if let Some(resp) = response {
-                let oa_resp: OpenAlexResponse = resp
-                    .json()
-                    .await
-                    .unwrap_or_else(|e| {
-                        eprintln!("OpenAlex JSON parse error: {}", e);
-                        OpenAlexResponse { results: vec![] }
-                    });
-                results = oa_resp.results;
+                let oa_resp: OpenAlexResponse = resp.json().await.unwrap_or_else(|e| {
+                    eprintln!("OpenAlex JSON parse error (cit): {}", e);
+                    OpenAlexResponse { results: vec![] }
+                });
+                cit_results = oa_resp.results;
             }
 
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            (doi_to_abs_indices, results)
+
+            // 2. Fetch Abstracts
+            let mut abs_results = Vec::new();
+            let mut response = None;
+            for attempt in 0..3 {
+                let res = client
+                    .get(base_url)
+                    .query(&[
+                        ("filter", filter.as_str()),
+                        ("select", "doi,abstract_inverted_index"),
+                        ("per_page", per_page.as_str()),
+                    ])
+                    .header("User-Agent", "ScholarSearch/1.0 (mailto:test@example.com)")
+                    .send()
+                    .await;
+
+                match res {
+                    Ok(resp) if resp.status().is_success() => { response = Some(resp); break; }
+                    Ok(resp) if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS || resp.status().is_server_error() => {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(200 * (1_u64 << attempt))).await;
+                    }
+                    Ok(resp) => { eprintln!("OpenAlex request failed for abs: {}", resp.status()); break; }
+                    Err(err) => {
+                        if attempt == 2 { eprintln!("OpenAlex request error for abs: {}", err); }
+                        else { tokio::time::sleep(tokio::time::Duration::from_millis(200 * (1_u64 << attempt))).await; }
+                    }
+                }
+            }
+            if let Some(resp) = response {
+                let oa_resp: OpenAlexResponse = resp.json().await.unwrap_or_else(|e| {
+                    eprintln!("OpenAlex JSON parse error (abs): {}", e);
+                    OpenAlexResponse { results: vec![] }
+                });
+                abs_results = oa_resp.results;
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            (doi_to_abs_indices, cit_results, abs_results)
         }
     });
 
     // Run up to 5 API requests concurrently
     let mut stream = stream::iter(futures).buffer_unordered(5);
 
-    while let Some((doi_to_abs_indices, results)) = stream.next().await {
-        for work in results {
-            let reconstructed = work.abstract_inverted_index.as_ref().map(reconstruct_abstract);
+    while let Some((doi_to_abs_indices, cit_results, abs_results)) = stream.next().await {
+        for work in cit_results {
             if let (Some(doi_raw), Some(count)) = (work.doi.as_deref(), work.cited_by_count) {
                 if let Some(work_doi) = extract_doi(doi_raw) {
                     if let Some(indices) = doi_to_abs_indices.get(&work_doi) {
                         for &idx in indices {
                             batch[idx].citation_count = Some(count);
+                        }
+                    }
+                }
+            }
+        }
+        for work in abs_results {
+            let reconstructed = work.abstract_inverted_index.as_ref().map(reconstruct_abstract);
+            if let Some(doi_raw) = work.doi.as_deref() {
+                if let Some(work_doi) = extract_doi(doi_raw) {
+                    if let Some(indices) = doi_to_abs_indices.get(&work_doi) {
+                        for &idx in indices {
                             if let Some(ref abs) = reconstructed {
                                 batch[idx].abstract_text = Some(abs.clone());
                             }
