@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+set -eo pipefail
 
 echo "Starting data population process..."
 
@@ -18,7 +18,7 @@ gunzip -f parser/dblp.xml.gz
 # 3. Run the parser
 echo "Running the parser to import data into PostgreSQL..."
 cd parser
-cargo run --release
+cargo run --release 2>&1 | tee parser_run.log
 cd ..
 
 # 4. Sync data to Meilisearch

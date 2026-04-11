@@ -434,7 +434,10 @@ async fn fetch_citation_counts(pool: &Pool<Postgres>, client: &reqwest::Client, 
                 let oa_resp: OpenAlexResponse = resp
                     .json()
                     .await
-                    .unwrap_or_else(|_| OpenAlexResponse { results: vec![] });
+                    .unwrap_or_else(|e| {
+                        eprintln!("OpenAlex JSON parse error: {}", e);
+                        OpenAlexResponse { results: vec![] }
+                    });
                 results = oa_resp.results;
             }
 
