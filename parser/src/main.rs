@@ -138,19 +138,26 @@ fn reconstruct_abstract(index: &HashMap<String, Vec<usize>>) -> String {
     words.into_iter().filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
+async fn parse_args() -> Result<Vec<String>> {
+    let args: Vec<String> = env::args().collect();
+    Ok(args)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = parse_args().await?;
+
     dotenvy::dotenv().ok();
     let db_url = env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let pool = PgPoolOptions::new()
         .max_connections(20)
         .connect(&db_url)
         .await?;
-    parse_and_insert(&pool, "dblp.xml").await?;
+    parse_and_insert(&pool, "dblp.xml", args).await?;
     Ok(())
 }
 
-async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
+async fn parse_and_insert(pool: &Pool<Postgres>, path: &str, args: Vec<String>) -> Result<()> {
     const TARGET_ENTRY_TAG: &str = "inproceedings";
 
     let mut reader = Reader::from_file(path)?;
@@ -161,6 +168,17 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
     let mut year_str = String::new();
     let skip_tags = ["i", "sub", "sup", "tt", "ref", "span", "br"];
 
+    let has_cite = args.contains(&"--cite".to_string());
+    let has_abstract = args.contains(&"--abstract".to_string());
+
+    let update_only_cite = has_cite && !has_abstract;
+
+    let (enable_cite, enable_abstract, enable_insert) = if !has_cite && !has_abstract {
+        (true, true, true)
+    } else {
+        (has_cite, has_abstract, !update_only_cite)
+    };
+
     println!("Start Parsing...");
 
     let (tx, mut rx) = mpsc::channel::<Vec<Paper>>(10);
@@ -169,14 +187,24 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str) -> Result<()> {
     let consumer_handle = tokio::spawn(async move {
         let http_client = reqwest::Client::new();
         while let Some(mut batch) = rx.recv().await {
-            if let Err(e) = fetch_citation_counts(&http_client, &mut batch).await {
-                eprintln!("Error fetching citations: {}", e);
+            if enable_cite {
+                if let Err(e) = fetch_citation_counts(&http_client, &mut batch).await {
+                    eprintln!("Error fetching citations: {}", e);
+                }
             }
-            if let Err(e) = fetch_abstracts(&pool_clone, &http_client, &mut batch).await {
-                eprintln!("Error fetching abstracts: {}", e);
+            if enable_abstract {
+                if let Err(e) = fetch_abstracts(&pool_clone, &http_client, &mut batch).await {
+                    eprintln!("Error fetching abstracts: {}", e);
+                }
             }
-            if let Err(e) = insert_batch(&pool_clone, &mut batch).await {
-                eprintln!("Error inserting batch: {}", e);
+            if enable_insert {
+                if let Err(e) = insert_batch(&pool_clone, &mut batch).await {
+                    eprintln!("Error inserting batch: {}", e);
+                }
+            } else if update_only_cite {
+                if let Err(e) = update_citations_batch(&pool_clone, &batch).await {
+                    eprintln!("Error updating citations: {}", e);
+                }
             }
             print!(".");
             let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -770,5 +798,41 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
     }
 
     tx.commit().await?;
+    Ok(())
+}
+
+async fn update_citations_batch(pool: &Pool<Postgres>, batch: &[Paper]) -> Result<()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+
+    let mut dblp_keys = Vec::with_capacity(batch.len());
+    let mut cit_counts = Vec::with_capacity(batch.len());
+
+    let mut dblp_key_seen = std::collections::HashSet::new();
+
+    for paper in batch {
+        if !dblp_key_seen.insert(paper.dblp_key.clone()) {
+            continue;
+        }
+        if let Some(count) = paper.citation_count {
+            if count > 0 {
+                dblp_keys.push(paper.dblp_key.clone());
+                cit_counts.push(count);
+            }
+        }
+    }
+
+    if !dblp_keys.is_empty() {
+        sqlx::query(
+            "UPDATE papers SET citation_count = v.citation_count \
+             FROM (SELECT * FROM UNNEST($1::text[], $2::int[])) AS v(dblp_key, citation_count) \
+             WHERE papers.dblp_key = v.dblp_key AND v.citation_count > 0"
+        )
+        .bind(&dblp_keys)
+        .bind(&cit_counts)
+        .execute(pool).await?;
+    }
+
     Ok(())
 }
