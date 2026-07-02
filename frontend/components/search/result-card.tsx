@@ -6,13 +6,9 @@ import { Paper } from '@/hooks/use-search'
 import { useQueryState } from 'nuqs'
 import React from 'react'
 import { BibtexDialog } from './bibtex-dialog'
-import { useGemini } from '@/context/gemini-context'
-import { Sparkles } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 
 export function ResultCard({ paper }: { paper: Paper }) {
     const [q, setQ] = useQueryState('q')
-    const { openGemini } = useGemini()
     const isSearchActive = q && q.trim().length > 0;
 
     return (
@@ -69,15 +65,6 @@ export function ResultCard({ paper }: { paper: Paper }) {
                             Cited by {paper._formatted?.citation_count || paper.citation_count || 0}
                         </span>
                         <div className="ml-auto flex items-center gap-2">
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 px-2 text-xs text-muted-foreground hover:text-primary gap-1"
-                                onClick={() => openGemini(paper)}
-                            >
-                                <Sparkles className="w-3 h-3" />
-                                Gemini Insight
-                            </Button>
                             <BibtexDialog paper={paper} />
                         </div>
                     </div>

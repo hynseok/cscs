@@ -3,7 +3,6 @@
 import * as React from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider as NextThemesProvider } from 'next-themes'
-import { GeminiProvider } from '@/context/gemini-context'
 
 export function Providers({ children }: { children: React.ReactNode }) {
     const [queryClient] = React.useState(() => new QueryClient({
@@ -23,9 +22,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 enableSystem
                 disableTransitionOnChange
             >
-                <GeminiProvider>
-                    {children}
-                </GeminiProvider>
+                {children}
             </NextThemesProvider>
         </QueryClientProvider>
     )

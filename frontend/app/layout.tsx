@@ -4,7 +4,6 @@ import { Inter } from "next/font/google";
 import { NuqsAdapter } from 'nuqs/adapters/next/app'
 import "./globals.css";
 import { Providers } from "./providers";
-import { GeminiPanel } from "@/components/gemini-panel";
 import { JsonLd } from "@/components/json-ld";
 import { SiteFooter } from "@/components/site-footer";
 
@@ -64,7 +63,6 @@ export default function RootLayout({
             <main className="flex-1">
               {children}
             </main>
-            <GeminiPanel />
           </Providers>
         </NuqsAdapter>
         <SiteFooter />

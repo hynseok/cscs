@@ -13,8 +13,6 @@ use redis::AsyncCommands;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
-mod gemini;
-
 #[derive(Clone)]
 struct AppState {
     meili: Client,
@@ -69,7 +67,6 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/search", get(search_papers))
-        .route("/gemini", post(gemini::gemini_handler))
         .route("/seo/search", post(post_seo_search))
         .route("/seo/sitemap", get(get_seo_sitemap))
         .layer(CorsLayer::permissive())

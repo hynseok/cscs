@@ -7,13 +7,10 @@
 
 **CSCS** is a high-performance academic search engine designed specifically for **Top-Tier Computer Science conference papers**. Built with speed and precision in mind, it leverages the power of Rust and Meilisearch to deliver instant results from the massive DBLP dataset.
 
-Powered by Gemini AI, CSCS goes beyond simple keyword matching to provide intelligent insights and summaries, helping researchers find relevant papers faster.
-
 
 ## Key Features
 
 -   **Blazing Fast Search**: Engineered with **Rust** and **Meilisearch** for millisecond-latency queries.
--   **AI-Powered Insights**: Integrated **Gemini AI** provides instant summaries and explains paper concepts.
 -   **Comprehensive Data**: Indexed with the vast **DBLP** computer science bibliography, specifically curated to include only **[top-tier conference papers](https://gist.github.com/Pusnow/6eb933355b5cb8d31ef1abcb3c3e1206)**.
 -   **Modern Interface**: Responsive UI built with **Next.js 16**, **Tailwind CSS**, and **Radix UI**.
 -   **Advanced Filtering**: Filter by year, venue, and more with granular control.
