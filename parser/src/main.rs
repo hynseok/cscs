@@ -109,33 +109,15 @@ struct Paper {
     abstract_text: Option<String>,
 }
 
+// Semantic Scholar's `/paper/batch` returns a JSON array positionally aligned
+// with the requested ids (null for unknown papers). Abstracts come back as
+// plain text, so no inverted-index reconstruction is needed.
 #[derive(Deserialize, Debug)]
-struct OpenAlexResponse {
-    results: Vec<OpenAlexWork>,
-}
-
-#[derive(Deserialize, Debug)]
-struct OpenAlexWork {
-    doi: Option<String>,
-    title: Option<String>,
-    cited_by_count: Option<i32>,
-    abstract_inverted_index: Option<HashMap<String, Vec<usize>>>,
-}
-
-fn reconstruct_abstract(index: &HashMap<String, Vec<usize>>) -> String {
-    let max_idx = index.values().flat_map(|v| v.iter()).max().copied().unwrap_or(0);
-    if index.is_empty() || max_idx > 20000 {
-        return String::new();
-    }
-    let mut words = vec!["".to_string(); max_idx + 1];
-    for (word, positions) in index {
-        for &pos in positions {
-            if pos <= max_idx {
-                words[pos] = word.clone();
-            }
-        }
-    }
-    words.into_iter().filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+struct SemanticScholarPaper {
+    #[serde(rename = "citationCount")]
+    citation_count: Option<i32>,
+    #[serde(rename = "abstract")]
+    abstract_text: Option<String>,
 }
 
 async fn parse_args() -> Result<Vec<String>> {
@@ -183,17 +165,21 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str, args: Vec<String>) 
 
     let (tx, mut rx) = mpsc::channel::<Vec<Paper>>(10);
     let pool_clone = pool.clone();
-    
+    let api_key = env::var("SEMANTIC_SCHOLAR_API_KEY").ok();
+    if (enable_cite || enable_abstract) && api_key.is_none() {
+        eprintln!("Warning: SEMANTIC_SCHOLAR_API_KEY not set; requests will be heavily rate-limited.");
+    }
+
     let consumer_handle = tokio::spawn(async move {
         let http_client = reqwest::Client::new();
         while let Some(mut batch) = rx.recv().await {
             if enable_cite {
-                if let Err(e) = fetch_citation_counts(&http_client, &mut batch).await {
+                if let Err(e) = fetch_citation_counts(&http_client, api_key.as_deref(), &mut batch).await {
                     eprintln!("Error fetching citations: {}", e);
                 }
             }
             if enable_abstract {
-                if let Err(e) = fetch_abstracts(&pool_clone, &http_client, &mut batch).await {
+                if let Err(e) = fetch_abstracts(&pool_clone, &http_client, api_key.as_deref(), &mut batch).await {
                     eprintln!("Error fetching abstracts: {}", e);
                 }
             }
@@ -373,111 +359,106 @@ fn extract_doi(url: &str) -> Option<String> {
     }
 }
 
-async fn fetch_citation_counts(client: &reqwest::Client, batch: &mut Vec<Paper>) -> Result<()> {
+/// POST a batch of Semantic Scholar ids (e.g. "DOI:10.1145/...") and return the
+/// papers positionally aligned with `ids` (None for unknown / failed lookups).
+async fn semantic_scholar_batch(
+    client: &reqwest::Client,
+    api_key: Option<&str>,
+    ids: &[String],
+    fields: &str,
+) -> Vec<Option<SemanticScholarPaper>> {
+    let url = "https://api.semanticscholar.org/graph/v1/paper/batch";
+    let body = serde_json::json!({ "ids": ids });
+
+    for attempt in 0..3 {
+        let mut req = client
+            .post(url)
+            .query(&[("fields", fields)])
+            .header("User-Agent", "CSCS/1.0")
+            .json(&body);
+        if let Some(key) = api_key {
+            req = req.header("x-api-key", key);
+        }
+
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<Vec<Option<SemanticScholarPaper>>>().await {
+                    Ok(parsed) => return parsed,
+                    Err(e) => {
+                        eprintln!("Semantic Scholar JSON parse error ({}): {}", fields, e);
+                        return Vec::new();
+                    }
+                }
+            }
+            Ok(resp)
+                if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    || resp.status().is_server_error() =>
+            {
+                let delay_ms = 500 * (1_u64 << attempt);
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            }
+            Ok(resp) => {
+                eprintln!("Semantic Scholar request failed with status {}", resp.status());
+                return Vec::new();
+            }
+            Err(err) => {
+                if attempt == 2 {
+                    eprintln!("Semantic Scholar request error: {}", err);
+                } else {
+                    let delay_ms = 500 * (1_u64 << attempt);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+async fn fetch_citation_counts(
+    client: &reqwest::Client,
+    api_key: Option<&str>,
+    batch: &mut Vec<Paper>,
+) -> Result<()> {
     if batch.is_empty() {
         return Ok(());
     }
 
-    let base_url = "https://api.openalex.org/works";
-    let mut chunks_data = Vec::new();
-    let mut current_offset = 0;
-
-    for chunk in batch.chunks(50) {
-        let mut doi_to_abs_indices: HashMap<String, Vec<usize>> = HashMap::new();
-
-        for (i, p) in chunk.iter().enumerate() {
-            let abs_i = current_offset + i;
-            for link in &p.ee_links {
-                if let Some(doi) = extract_doi(link) {
-                    doi_to_abs_indices.entry(doi).or_default().push(abs_i);
-                    break;
-                }
+    // Map each paper (by batch index) to its first resolvable DOI.
+    let mut targets: Vec<(usize, String)> = Vec::new();
+    for (i, p) in batch.iter().enumerate() {
+        for link in &p.ee_links {
+            if let Some(doi) = extract_doi(link) {
+                targets.push((i, format!("DOI:{}", doi)));
+                break;
             }
-        }
-        current_offset += chunk.len();
-
-        if !doi_to_abs_indices.is_empty() {
-            chunks_data.push(doi_to_abs_indices);
         }
     }
+    if targets.is_empty() {
+        return Ok(());
+    }
 
-    let futures = chunks_data.into_iter().map(|doi_to_abs_indices| {
+    let api_key = api_key.map(|s| s.to_string());
+    // Semantic Scholar's batch endpoint accepts up to 500 ids per request.
+    let futures = targets.chunks(500).map(|chunk| {
         let client = client.clone();
+        let api_key = api_key.clone();
+        let indices: Vec<usize> = chunk.iter().map(|(i, _)| *i).collect();
+        let ids: Vec<String> = chunk.iter().map(|(_, id)| id.clone()).collect();
         async move {
-            let mut dois: Vec<String> = doi_to_abs_indices.keys().cloned().collect();
-            dois.sort();
-
-            let filter = format!("doi:{}", dois.join("|"));
-            let per_page = dois.len().to_string();
-            let mut response: Option<reqwest::Response> = None;
-
-            for attempt in 0..3 {
-                let res = client
-                    .get(base_url)
-                    .query(&[
-                        ("filter", filter.as_str()),
-                        ("select", "doi,cited_by_count"),
-                        ("per_page", per_page.as_str()),
-                    ])
-                    .header("User-Agent", "ScholarSearch/1.0 (mailto:test@example.com)")
-                    .send()
-                    .await;
-
-                match res {
-                    Ok(resp) if resp.status().is_success() => {
-                        response = Some(resp);
-                        break;
-                    }
-                    Ok(resp)
-                        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-                            || resp.status().is_server_error() =>
-                    {
-                        let delay_ms = 200 * (1_u64 << attempt);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                    }
-                    Ok(resp) => {
-                        eprintln!("OpenAlex citation request failed with status {}", resp.status());
-                        break;
-                    }
-                    Err(err) => {
-                        if attempt == 2 {
-                            eprintln!("OpenAlex citation request error: {}", err);
-                        } else {
-                            let delay_ms = 200 * (1_u64 << attempt);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                        }
-                    }
-                }
-            }
-
-            let mut results = Vec::new();
-            if let Some(resp) = response {
-                let oa_resp: OpenAlexResponse = resp
-                    .json()
-                    .await
-                    .unwrap_or_else(|e| {
-                        eprintln!("OpenAlex JSON parse error (citation): {}", e);
-                        OpenAlexResponse { results: vec![] }
-                    });
-                results = oa_resp.results;
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            (doi_to_abs_indices, results)
+            let results = semantic_scholar_batch(&client, api_key.as_deref(), &ids, "citationCount").await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            (indices, results)
         }
     });
 
-    let mut stream = stream::iter(futures).buffer_unordered(5);
+    // Keep concurrency low; Semantic Scholar rate limits are stricter than OpenAlex.
+    let mut stream = stream::iter(futures).buffer_unordered(2);
 
-    while let Some((doi_to_abs_indices, results)) = stream.next().await {
-        for work in results {
-            if let (Some(doi_raw), Some(count)) = (work.doi.as_deref(), work.cited_by_count) {
-                if let Some(work_doi) = extract_doi(doi_raw) {
-                    if let Some(indices) = doi_to_abs_indices.get(&work_doi) {
-                        for &idx in indices {
-                            batch[idx].citation_count = Some(count);
-                        }
-                    }
+    while let Some((indices, results)) = stream.next().await {
+        for (idx, res) in indices.into_iter().zip(results) {
+            if let Some(paper) = res {
+                if let Some(count) = paper.citation_count {
+                    batch[idx].citation_count = Some(count);
                 }
             }
         }
@@ -486,7 +467,12 @@ async fn fetch_citation_counts(client: &reqwest::Client, batch: &mut Vec<Paper>)
     Ok(())
 }
 
-async fn fetch_abstracts(pool: &Pool<Postgres>, client: &reqwest::Client, batch: &mut Vec<Paper>) -> Result<()> {
+async fn fetch_abstracts(
+    pool: &Pool<Postgres>,
+    client: &reqwest::Client,
+    api_key: Option<&str>,
+    batch: &mut Vec<Paper>,
+) -> Result<()> {
     if batch.is_empty() {
         return Ok(());
     }
@@ -501,113 +487,44 @@ async fn fetch_abstracts(pool: &Pool<Postgres>, client: &reqwest::Client, batch:
 
     let existing_keys: std::collections::HashSet<String> = existing_rows.into_iter().map(|r| r.0).collect();
 
-    let base_url = "https://api.openalex.org/works";
-    let mut chunks_data = Vec::new();
-    let mut current_offset = 0;
-
-    for chunk in batch.chunks(50) {
-        let mut doi_to_abs_indices: HashMap<String, Vec<usize>> = HashMap::new();
-
-        for (i, p) in chunk.iter().enumerate() {
-            let abs_i = current_offset + i;
-            if existing_keys.contains(&p.dblp_key) {
-                continue;
-            }
-            for link in &p.ee_links {
-                if let Some(doi) = extract_doi(link) {
-                    doi_to_abs_indices.entry(doi).or_default().push(abs_i);
-                    break;
-                }
-            }
+    // Map each not-yet-populated paper (by batch index) to its first resolvable DOI.
+    let mut targets: Vec<(usize, String)> = Vec::new();
+    for (i, p) in batch.iter().enumerate() {
+        if existing_keys.contains(&p.dblp_key) {
+            continue;
         }
-        current_offset += chunk.len();
-
-        if !doi_to_abs_indices.is_empty() {
-            chunks_data.push(doi_to_abs_indices);
+        for link in &p.ee_links {
+            if let Some(doi) = extract_doi(link) {
+                targets.push((i, format!("DOI:{}", doi)));
+                break;
+            }
         }
     }
+    if targets.is_empty() {
+        return Ok(());
+    }
 
-    let futures = chunks_data.into_iter().map(|doi_to_abs_indices| {
+    let api_key = api_key.map(|s| s.to_string());
+    let futures = targets.chunks(500).map(|chunk| {
         let client = client.clone();
+        let api_key = api_key.clone();
+        let indices: Vec<usize> = chunk.iter().map(|(i, _)| *i).collect();
+        let ids: Vec<String> = chunk.iter().map(|(_, id)| id.clone()).collect();
         async move {
-            let mut dois: Vec<String> = doi_to_abs_indices.keys().cloned().collect();
-            dois.sort();
-
-            let filter = format!("doi:{}", dois.join("|"));
-            let per_page = dois.len().to_string();
-            let mut response: Option<reqwest::Response> = None;
-
-            for attempt in 0..3 {
-                let res = client
-                    .get(base_url)
-                    .query(&[
-                        ("filter", filter.as_str()),
-                        ("select", "doi,abstract_inverted_index"),
-                        ("per_page", per_page.as_str()),
-                    ])
-                    .header("User-Agent", "ScholarSearch/1.0 (mailto:test@example.com)")
-                    .send()
-                    .await;
-
-                match res {
-                    Ok(resp) if resp.status().is_success() => {
-                        response = Some(resp);
-                        break;
-                    }
-                    Ok(resp)
-                        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-                            || resp.status().is_server_error() =>
-                    {
-                        let delay_ms = 200 * (1_u64 << attempt);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                    }
-                    Ok(resp) => {
-                        eprintln!("OpenAlex abstract request failed with status {}", resp.status());
-                        break;
-                    }
-                    Err(err) => {
-                        if attempt == 2 {
-                            eprintln!("OpenAlex abstract request error: {}", err);
-                        } else {
-                            let delay_ms = 200 * (1_u64 << attempt);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                        }
-                    }
-                }
-            }
-
-            let mut results = Vec::new();
-            if let Some(resp) = response {
-                let oa_resp: OpenAlexResponse = resp
-                    .json()
-                    .await
-                    .unwrap_or_else(|e| {
-                        eprintln!("OpenAlex JSON parse error (abstract): {}", e);
-                        OpenAlexResponse { results: vec![] }
-                    });
-                results = oa_resp.results;
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            (doi_to_abs_indices, results)
+            let results = semantic_scholar_batch(&client, api_key.as_deref(), &ids, "abstract").await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            (indices, results)
         }
     });
 
-    let mut stream = stream::iter(futures).buffer_unordered(5);
+    let mut stream = stream::iter(futures).buffer_unordered(2);
 
-    while let Some((doi_to_abs_indices, results)) = stream.next().await {
-        for work in results {
-            let reconstructed = work.abstract_inverted_index.as_ref().map(reconstruct_abstract);
-            if let Some(doi_raw) = work.doi.as_deref() {
-                if let Some(work_doi) = extract_doi(doi_raw) {
-                    if let Some(indices) = doi_to_abs_indices.get(&work_doi) {
-                        for &idx in indices {
-                            if let Some(ref abs) = reconstructed {
-                                if !abs.is_empty() {
-                                    batch[idx].abstract_text = Some(abs.clone());
-                                }
-                            }
-                        }
+    while let Some((indices, results)) = stream.next().await {
+        for (idx, res) in indices.into_iter().zip(results) {
+            if let Some(paper) = res {
+                if let Some(abs) = paper.abstract_text {
+                    if !abs.is_empty() {
+                        batch[idx].abstract_text = Some(abs);
                     }
                 }
             }
