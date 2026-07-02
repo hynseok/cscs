@@ -3,7 +3,6 @@ use once_cell::sync::Lazy;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use serde::Deserialize;
-use futures::stream::{self, StreamExt};
 use tokio::sync::mpsc;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
@@ -163,32 +162,59 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str, args: Vec<String>) 
 
     println!("Start Parsing...");
 
-    let (tx, mut rx) = mpsc::channel::<Vec<Paper>>(10);
-    let pool_clone = pool.clone();
+    // Two-stage pipeline. The Semantic Scholar fetcher is the bottleneck (~1
+    // request/second), so it runs on its own globally-paced loop while the DB
+    // inserter works in parallel — the rate-limit budget is never spent waiting
+    // on Postgres. producer --raw--> fetcher --enriched--> inserter.
+    let (tx, mut raw_rx) = mpsc::channel::<Vec<Paper>>(10);
+    let (enriched_tx, mut enriched_rx) = mpsc::channel::<Vec<Paper>>(4);
+
     let api_key = env::var("SEMANTIC_SCHOLAR_API_KEY").ok();
     if (enable_cite || enable_abstract) && api_key.is_none() {
         eprintln!("Warning: SEMANTIC_SCHOLAR_API_KEY not set; requests will be heavily rate-limited.");
     }
 
-    let consumer_handle = tokio::spawn(async move {
+    // Stage 1: enrich via Semantic Scholar, globally paced to 1 request/second.
+    let fetch_pool = pool.clone();
+    let fetcher_handle = tokio::spawn(async move {
         let http_client = reqwest::Client::new();
-        while let Some(mut batch) = rx.recv().await {
-            if enable_cite {
-                if let Err(e) = fetch_citation_counts(&http_client, api_key.as_deref(), &mut batch).await {
-                    eprintln!("Error fetching citations: {}", e);
+        // 1100ms leaves headroom under the 1 req/s limit; Delay keeps >=1 period
+        // between ticks even after a slow request/retry, so it never bursts.
+        let mut pacer = tokio::time::interval(tokio::time::Duration::from_millis(1100));
+        pacer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        while let Some(mut batch) = raw_rx.recv().await {
+            if enable_cite || enable_abstract {
+                if let Err(e) = enrich_batch(
+                    &fetch_pool,
+                    &http_client,
+                    api_key.as_deref(),
+                    &mut batch,
+                    enable_cite,
+                    enable_abstract,
+                    &mut pacer,
+                )
+                .await
+                {
+                    eprintln!("Error enriching batch: {}", e);
                 }
             }
-            if enable_abstract {
-                if let Err(e) = fetch_abstracts(&pool_clone, &http_client, api_key.as_deref(), &mut batch).await {
-                    eprintln!("Error fetching abstracts: {}", e);
-                }
+            if enriched_tx.send(batch).await.is_err() {
+                break;
             }
+        }
+    });
+
+    // Stage 2: persist to Postgres, concurrently with stage 1.
+    let insert_pool = pool.clone();
+    let inserter_handle = tokio::spawn(async move {
+        while let Some(mut batch) = enriched_rx.recv().await {
             if enable_insert {
-                if let Err(e) = insert_batch(&pool_clone, &mut batch).await {
+                if let Err(e) = insert_batch(&insert_pool, &mut batch).await {
                     eprintln!("Error inserting batch: {}", e);
                 }
             } else if update_only_cite {
-                if let Err(e) = update_citations_batch(&pool_clone, &batch).await {
+                if let Err(e) = update_citations_batch(&insert_pool, &batch).await {
                     eprintln!("Error updating citations: {}", e);
                 }
             }
@@ -287,12 +313,13 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str, args: Vec<String>) 
         tx.send(batch).await.context("Failed to push final batch")?;
     }
     
-    // Close channel
+    // Close the pipeline: dropping tx ends stage 1, whose enriched_tx then drops
+    // and ends stage 2.
     drop(tx);
-    
-    // Wait for consumer to finish processing all batches
-    consumer_handle.await.context("Consumer thread panicked")?;
-    
+
+    fetcher_handle.await.context("Fetcher task panicked")?;
+    inserter_handle.await.context("Inserter task panicked")?;
+
     Ok(())
 }
 
@@ -414,83 +441,51 @@ async fn semantic_scholar_batch(
     Vec::new()
 }
 
-async fn fetch_citation_counts(
-    client: &reqwest::Client,
-    api_key: Option<&str>,
-    batch: &mut Vec<Paper>,
-) -> Result<()> {
-    if batch.is_empty() {
-        return Ok(());
-    }
-
-    // Map each paper (by batch index) to its first resolvable DOI.
-    let mut targets: Vec<(usize, String)> = Vec::new();
-    for (i, p) in batch.iter().enumerate() {
-        for link in &p.ee_links {
-            if let Some(doi) = extract_doi(link) {
-                targets.push((i, format!("DOI:{}", doi)));
-                break;
-            }
-        }
-    }
-    if targets.is_empty() {
-        return Ok(());
-    }
-
-    let api_key = api_key.map(|s| s.to_string());
-    // Semantic Scholar's batch endpoint accepts up to 500 ids per request.
-    let futures = targets.chunks(500).map(|chunk| {
-        let client = client.clone();
-        let api_key = api_key.clone();
-        let indices: Vec<usize> = chunk.iter().map(|(i, _)| *i).collect();
-        let ids: Vec<String> = chunk.iter().map(|(_, id)| id.clone()).collect();
-        async move {
-            let results = semantic_scholar_batch(&client, api_key.as_deref(), &ids, "citationCount").await;
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            (indices, results)
-        }
-    });
-
-    // Keep concurrency low; Semantic Scholar rate limits are stricter than OpenAlex.
-    let mut stream = stream::iter(futures).buffer_unordered(2);
-
-    while let Some((indices, results)) = stream.next().await {
-        for (idx, res) in indices.into_iter().zip(results) {
-            if let Some(paper) = res {
-                if let Some(count) = paper.citation_count {
-                    batch[idx].citation_count = Some(count);
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn fetch_abstracts(
+/// Enrich a batch in place with citation counts and/or abstracts. Sequential and
+/// gated by the shared `pacer`, so the whole run honors Semantic Scholar's ~1
+/// request/second limit. When both are wanted they are requested together in a
+/// single call, halving the number of requests versus two separate passes.
+async fn enrich_batch(
     pool: &Pool<Postgres>,
     client: &reqwest::Client,
     api_key: Option<&str>,
     batch: &mut Vec<Paper>,
+    want_cite: bool,
+    want_abstract: bool,
+    pacer: &mut tokio::time::Interval,
 ) -> Result<()> {
-    if batch.is_empty() {
+    if batch.is_empty() || (!want_cite && !want_abstract) {
         return Ok(());
     }
 
-    // Skip papers that already have abstracts in DB
-    let dblp_keys: Vec<String> = batch.iter().map(|p| p.dblp_key.clone()).collect();
-    let existing_rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT dblp_key FROM papers WHERE dblp_key = ANY($1) AND abstract IS NOT NULL"
-    )
-        .bind(&dblp_keys)
-        .fetch_all(pool).await?;
+    // For pure abstract backfill, skip papers that already have one in the DB.
+    // When citations are wanted we must query every paper anyway (counts drift
+    // over time), so the skip set only applies to abstract-only runs.
+    let skip: std::collections::HashSet<String> = if want_abstract && !want_cite {
+        let keys: Vec<String> = batch.iter().map(|p| p.dblp_key.clone()).collect();
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT dblp_key FROM papers WHERE dblp_key = ANY($1) AND abstract IS NOT NULL"
+        )
+            .bind(&keys)
+            .fetch_all(pool).await?;
+        rows.into_iter().map(|r| r.0).collect()
+    } else {
+        std::collections::HashSet::new()
+    };
 
-    let existing_keys: std::collections::HashSet<String> = existing_rows.into_iter().map(|r| r.0).collect();
+    let mut fields: Vec<&str> = Vec::new();
+    if want_cite {
+        fields.push("citationCount");
+    }
+    if want_abstract {
+        fields.push("abstract");
+    }
+    let fields = fields.join(",");
 
-    // Map each not-yet-populated paper (by batch index) to its first resolvable DOI.
+    // Map each target paper (by batch index) to its first resolvable DOI.
     let mut targets: Vec<(usize, String)> = Vec::new();
     for (i, p) in batch.iter().enumerate() {
-        if existing_keys.contains(&p.dblp_key) {
+        if skip.contains(&p.dblp_key) {
             continue;
         }
         for link in &p.ee_links {
@@ -504,27 +499,26 @@ async fn fetch_abstracts(
         return Ok(());
     }
 
-    let api_key = api_key.map(|s| s.to_string());
-    let futures = targets.chunks(500).map(|chunk| {
-        let client = client.clone();
-        let api_key = api_key.clone();
-        let indices: Vec<usize> = chunk.iter().map(|(i, _)| *i).collect();
+    // Semantic Scholar's batch endpoint accepts up to 500 ids per request.
+    for chunk in targets.chunks(500) {
         let ids: Vec<String> = chunk.iter().map(|(_, id)| id.clone()).collect();
-        async move {
-            let results = semantic_scholar_batch(&client, api_key.as_deref(), &ids, "abstract").await;
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            (indices, results)
-        }
-    });
 
-    let mut stream = stream::iter(futures).buffer_unordered(2);
+        // Gate every HTTP call through the shared pacer to honor the global limit.
+        pacer.tick().await;
+        let results = semantic_scholar_batch(client, api_key, &ids, &fields).await;
 
-    while let Some((indices, results)) = stream.next().await {
-        for (idx, res) in indices.into_iter().zip(results) {
+        for ((idx, _), res) in chunk.iter().zip(results) {
             if let Some(paper) = res {
-                if let Some(abs) = paper.abstract_text {
-                    if !abs.is_empty() {
-                        batch[idx].abstract_text = Some(abs);
+                if want_cite {
+                    if let Some(count) = paper.citation_count {
+                        batch[*idx].citation_count = Some(count);
+                    }
+                }
+                if want_abstract {
+                    if let Some(abs) = paper.abstract_text {
+                        if !abs.is_empty() {
+                            batch[*idx].abstract_text = Some(abs);
+                        }
                     }
                 }
             }
