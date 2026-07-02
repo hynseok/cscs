@@ -305,6 +305,16 @@ async fn parse_and_insert(pool: &Pool<Postgres>, path: &str, args: Vec<String>) 
                 }
             }
             Ok(Event::Eof) => break,
+            Err(e) => {
+                // quick-xml can keep returning the same Err at this position, so
+                // stop rather than silently dropping data or spinning forever.
+                eprintln!(
+                    "XML parse error at byte {}: {} (stopping)",
+                    reader.buffer_position(),
+                    e
+                );
+                break;
+            }
             _ => {}
         }
         buf.clear();
@@ -637,7 +647,9 @@ async fn insert_batch(pool: &Pool<Postgres>, batch: &mut Vec<Paper>) -> Result<(
             "INSERT INTO papers (venue_id, title, year, ee_link, dblp_key, citation_count, abstract) \
              SELECT * FROM UNNEST($1::int[], $2::text[], $3::int[], $4::text[], $5::text[], $6::int[], $7::text[]) \
              ON CONFLICT (dblp_key) DO UPDATE SET \
+             venue_id = EXCLUDED.venue_id, \
              title = EXCLUDED.title, \
+             year = EXCLUDED.year, \
              citation_count = CASE \
                  WHEN EXCLUDED.citation_count > 0 THEN EXCLUDED.citation_count \
                  ELSE COALESCE(papers.citation_count, EXCLUDED.citation_count) \
