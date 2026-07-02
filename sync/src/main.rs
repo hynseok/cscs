@@ -22,13 +22,16 @@ async fn main() -> anyhow::Result<()> {
     let db_url = std::env::var("DATABASE_URL")?;
     let pool = PgPoolOptions::new().connect(&db_url).await?;
 
-    let meili = Client::new("http://localhost:7700", Some("1234"))?;
+    let meili_url = std::env::var("MEILI_URL").unwrap_or_else(|_| "http://localhost:7700".into());
+    let meili_key = std::env::var("MEILI_MASTER_KEY").expect("MEILI_MASTER_KEY must be set");
+    let meili = Client::new(meili_url, Some(meili_key))?;
     let papers_index = meili.index("papers");
 
     setup_meili_settings(&meili, &papers_index).await?;
 
-    let mut offset = 0;
-    let batch_size = 10000;
+    let mut last_id: i32 = 0;
+    let batch_size: i64 = 10000;
+    let mut total: i64 = 0;
 
     println!("Start indexing...");
 
@@ -41,12 +44,13 @@ async fn main() -> anyhow::Result<()> {
             JOIN venues v ON p.venue_id = v.id
             JOIN paper_authors pa ON p.id = pa.paper_id
             JOIN authors a ON pa.author_id = a.id
+            WHERE p.id > $1
             GROUP BY p.id, v.raw_name, p.ee_link, p.dblp_key, p.citation_count, p.abstract
             ORDER BY p.id ASC
-            LIMIT $1 OFFSET $2
+            LIMIT $2
             "#,
-            batch_size as i64,
-            offset as i64
+            last_id,
+            batch_size
         )
         .fetch_all(&pool)
         .await?;
@@ -54,6 +58,9 @@ async fn main() -> anyhow::Result<()> {
         if rows.is_empty() {
             break;
         }
+
+        // Advance the keyset cursor; rows are ordered by p.id ASC.
+        last_id = rows.last().map(|r| r.id).unwrap_or(last_id);
 
         let docs: Vec<PaperDoc> = rows
             .into_iter()
@@ -72,8 +79,8 @@ async fn main() -> anyhow::Result<()> {
 
         papers_index.add_documents(&docs, Some("id")).await?;
 
-        offset += batch_size;
-        println!("Indexed total: {} papers", offset);
+        total += docs.len() as i64;
+        println!("Indexed total: {} papers", total);
     }
 
     println!("All data with links has been successfully synced to Meilisearch.");
