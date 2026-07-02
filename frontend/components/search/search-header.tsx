@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { SearchInput } from './search-input'
 import { Github } from 'lucide-react'
+import { ModeToggle } from '@/components/ui/mode-toggle'
 
 export function SearchHeader() {
     return (
@@ -19,7 +20,8 @@ export function SearchHeader() {
                 <div className="flex-1 flex justify-start ml-2 md:ml-4">
                     <SearchInput />
                 </div>
-                <div className="hidden md:flex w-fit min-w-[100px] justify-end">
+                <div className="flex w-fit items-center justify-end gap-1 md:min-w-[100px]">
+                    <ModeToggle />
                     <a
                         href="https://github.com/hynseok/cscs"
                         target="_blank"

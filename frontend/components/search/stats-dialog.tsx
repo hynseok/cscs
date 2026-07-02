@@ -149,7 +149,7 @@ export function StatsDialog() {
         });
 
         return (
-            <ul className="flex flex-wrap justify-center gap-x-3 gap-y-1 pt-3 px-2" style={{ fontSize: '11px', color: '#52525b' }}>
+            <ul className="flex flex-wrap justify-center gap-x-3 gap-y-1 pt-3 px-2 text-muted-foreground" style={{ fontSize: '11px' }}>
                 {sortedPayload.map((entry: any, index: number) => (
                     <li
                         key={`item-${index}`}
@@ -210,11 +210,11 @@ export function StatsDialog() {
                                         />
                                         <Tooltip
                                             content={<CustomTooltip />}
-                                            cursor={{ fill: 'hsl(var(--muted))', opacity: 0.2, radius: 4 }}
+                                            cursor={{ fill: 'var(--muted)', opacity: 0.2, radius: 4 }}
                                         />
                                         <Bar
                                             dataKey="count"
-                                            fill="hsl(var(--primary))"
+                                            fill="var(--primary)"
                                             radius={[4, 4, 0, 0]}
                                         />
                                     </BarChart>
@@ -249,11 +249,11 @@ export function StatsDialog() {
                                         />
                                         <Tooltip
                                             content={<CustomTooltip />}
-                                            cursor={{ fill: 'hsl(var(--muted))', opacity: 0.2, radius: 4 }}
+                                            cursor={{ fill: 'var(--muted)', opacity: 0.2, radius: 4 }}
                                         />
                                         <Bar
                                             dataKey="count"
-                                            fill="hsl(var(--primary))"
+                                            fill="var(--primary)"
                                             radius={[0, 4, 4, 0]}
                                             barSize={16}
                                         />
@@ -285,7 +285,7 @@ export function StatsDialog() {
                                             {fieldData.map((entry, index) => (
                                                 <Cell
                                                     key={`cell-${index}`}
-                                                    fill={entry.name === 'Other' ? '#171717' : COLORS[index % COLORS.length]}
+                                                    fill={entry.name === 'Other' ? 'var(--muted-foreground)' : COLORS[index % COLORS.length]}
                                                     strokeWidth={0}
                                                 />
                                             ))}

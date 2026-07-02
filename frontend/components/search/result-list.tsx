@@ -1,10 +1,8 @@
 'use client'
 
-import React, { useEffect, useRef } from 'react'
 import { ResultCard } from './result-card'
 import { useSearch } from '@/hooks/use-search'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useInView } from 'react-intersection-observer'
 import { useQueryState, parseAsInteger } from 'nuqs'
 import { StatsDialog } from './stats-dialog'
 import {
