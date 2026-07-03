@@ -97,8 +97,58 @@ CSCS employs a data-driven microservices architecture:
 <img src="media/architecture.jpeg" width="600" />
 
 -   **Parser**: Rust-based CLI tool to parse XML DBLP dumps and populate Meilisearch/Postgres.
--   **Backend**: Rust API server handling search requests and AI proxy.
+-   **Backend**: Rust API server handling search requests.
 -   **Frontend**: Next.js client delivering a server-rendered, interactive experience.
+
+## Public API
+
+CSCS exposes a public, CORS-open search endpoint that anyone can call:
+
+```
+GET /api/v1/search
+```
+
+**Query parameters**
+
+| Param   | Type              | Description                                        |
+| ------- | ----------------- | -------------------------------------------------- |
+| `q`     | string            | Search query (title, authors, venue, abstract).    |
+| `venue` | string (repeated) | Filter by venue, e.g. `venue=OSDI&venue=SOSP`.     |
+| `year`  | int (repeated)    | Filter by year, e.g. `year=2023&year=2024`.        |
+| `sort`  | string            | `year` or `citation_count` (default: relevance).   |
+| `page`  | int               | 1-based page number (default: `1`).                |
+| `limit` | int               | Results per page (default: `20`, max: `100`).      |
+
+**Example**
+
+```bash
+curl "https://cscs.cbum.org/api/v1/search?q=consensus&venue=OSDI&sort=citation_count&limit=5"
+```
+
+**Response**
+
+```json
+{
+  "query": "consensus",
+  "page": 1,
+  "limit": 5,
+  "total": 128,
+  "count": 5,
+  "results": [
+    {
+      "id": 12345,
+      "title": "In Search of an Understandable Consensus Algorithm",
+      "authors": ["Diego Ongaro", "John Ousterhout"],
+      "venue": "USENIX ATC",
+      "year": 2014,
+      "citation_count": 4200,
+      "url": "https://www.usenix.org/...",
+      "dblp_key": "conf/usenix/OngaroO14",
+      "abstract": "Raft is a consensus algorithm for managing a replicated log..."
+    }
+  ]
+}
+```
 
 ## License
 

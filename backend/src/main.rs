@@ -41,6 +41,8 @@ struct PaperHit {
     ee_link: Option<String>,
     dblp_key: String,
     citation_count: i32,
+    #[serde(default)]
+    abstract_text: Option<String>,
 }
 
 #[tokio::main]
